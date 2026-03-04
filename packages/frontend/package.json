@@ -1,0 +1,17 @@
+{
+  "name": "@prediction-market/frontend",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.5",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.11",
+    "vite-plugin-node-polyfills": "^0.19.0"
+  },
+  "dependencies": {}
+}

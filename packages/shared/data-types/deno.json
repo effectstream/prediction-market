@@ -1,0 +1,14 @@
+{
+  "name": "@prediction-market/data-types",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./src/mod.ts",
+    "./grammar": "./src/grammar.ts",
+    "./config-dev": "./src/config.dev.ts"
+  },
+  "imports": {
+    "@paimaexample/config": "jsr:@paimaexample/config@0.7.2",
+    "@paimaexample/sm": "jsr:@paimaexample/sm@0.7.2",
+    "@sinclair/typebox": "npm:@sinclair/typebox@^0.34.30"
+  }
+}
