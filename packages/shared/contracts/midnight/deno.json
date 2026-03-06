@@ -1,0 +1,19 @@
+{
+  "name": "@prediction-market/midnight-contracts",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./deploy.ts"
+  },
+  "imports": {
+    "@paimaexample/midnight-contracts/deploy": "jsr:@paimaexample/midnight-contracts@0.7.2/deploy",
+    "@prediction-market/midnight-contract": "./prediction-market-contract/src/_index.ts",
+    "@prediction-market/midnight-contract/contract": "./prediction-market-contract/src/managed/contract/index.js",
+    "@prediction-market/midnight-contract/witnesses": "./prediction-market-contract/src/witnesses.ts",
+    "@midnight-ntwrk/compact-runtime": "npm:@midnight-ntwrk/compact-runtime@0.14.0",
+    "@midnight-ntwrk/onchain-runtime": "npm:@midnight-ntwrk/onchain-runtime-v2@2.0.0",
+    "@midnight-ntwrk/ledger": "npm:@midnight-ntwrk/ledger-v7@7.0.0",
+    "@midnight-ntwrk/ledger-v7": "npm:@midnight-ntwrk/ledger-v7@7.0.0",
+    "@midnight-ntwrk/zswap": "npm:@midnight-ntwrk/zswap@4.0.0",
+    "@midnight-ntwrk/wallet-sdk-address-format": "npm:@midnight-ntwrk/wallet-sdk-address-format@3.0.0"
+  }
+}

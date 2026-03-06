@@ -1,0 +1,5 @@
+2026-03-05T14:42:49.278Z effectstream-pglite: database: server listening on port 5432
+
+2026-03-05T14:42:49.280Z effectstream-pglite: error: Uncaught (in promise) Error: Extension bundle not found: file:///Users/joshuathomas/git/prediction-market/node_modules/@electric-sql/pglite/dist/pg_ivm.tar.gz
+    at ke (file:///Users/joshuathomas/Library/Caches/deno/npm/registry.npmjs.org/@electric-sql/pglite/0.3.15/dist/index.js:1:3286)
+

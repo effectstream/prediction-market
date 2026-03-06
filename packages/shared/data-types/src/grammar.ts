@@ -15,6 +15,10 @@ const BetAmount = Type.Union([
   Type.Literal(50),
 ]);
 const DisplayName = Type.String({ minLength: 1, maxLength: 30 });
+const MarketTitle = Type.String({ minLength: 1, maxLength: 200 });
+const MarketDescription = Type.String({ minLength: 0, maxLength: 500 });
+const MarketCategory = Type.String({ minLength: 1, maxLength: 50 });
+const CloseTime = Type.String({ minLength: 1, maxLength: 50 }); // ISO timestamp string
 
 export const predictionMarketGrammar = {
   /**
@@ -40,6 +44,44 @@ export const predictionMarketGrammar = {
   linkedDiscord: [
     ["walletAddress", WalletAddress],
     ["discordUsername", Type.String({ minLength: 1, maxLength: 50 })],
+  ],
+
+  /**
+   * Create Market (resolver only): cm|marketId|title|description|category|closeTime
+   * Example: cm|market_001|Will BTC hit 100k?|Bitcoin price prediction|crypto|2024-12-31T00:00:00Z
+   */
+  createdMarket: [
+    ["marketId", MarketID],
+    ["title", MarketTitle],
+    ["description", MarketDescription],
+    ["category", MarketCategory],
+    ["closeTime", CloseTime],
+  ],
+
+  /**
+   * Close Market (resolver only): clm|marketId
+   * Example: clm|market_001
+   */
+  closedMarket: [
+    ["marketId", MarketID],
+  ],
+
+  /**
+   * Resolve Market (resolver only): rm|marketId|winningOptionId
+   * Example: rm|market_001|option_yes
+   */
+  resolvedMarket: [
+    ["marketId", MarketID],
+    ["winningOptionId", OptionID],
+  ],
+
+  /**
+   * Claim Winnings: cw|marketId
+   * Example: cw|market_001
+   * The node computes the payout witness and submits to the Midnight batcher.
+   */
+  claimedWinnings: [
+    ["marketId", MarketID],
   ],
 } as const satisfies GrammarDefinition;
 

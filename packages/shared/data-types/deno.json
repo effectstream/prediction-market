@@ -7,6 +7,7 @@
     "./config-dev": "./src/config.dev.ts"
   },
   "imports": {
+    "@paimaexample/concise": "jsr:@paimaexample/concise@0.7.2",
     "@paimaexample/config": "jsr:@paimaexample/config@0.7.2",
     "@paimaexample/sm": "jsr:@paimaexample/sm@0.7.2",
     "@sinclair/typebox": "npm:@sinclair/typebox@^0.34.30"

@@ -16,12 +16,19 @@
     // Local packages
     "@prediction-market/database": "../database/src/mod.ts",
     "@prediction-market/data-types": "../../shared/data-types/src/mod.ts",
+    "@prediction-market/midnight-contract": "../../shared/contracts/midnight/prediction-market-contract/src/_index.ts",
+    "@prediction-market/midnight-contract/contract": "../../shared/contracts/midnight/prediction-market-contract/src/managed/contract/index.js",
+    "@prediction-market/midnight-contract/witnesses": "../../shared/contracts/midnight/prediction-market-contract/src/witnesses.ts",
 
     // Paima packages
     "@paimaexample/concise": "jsr:@paimaexample/concise@0.7.2",
     "@paimaexample/config": "jsr:@paimaexample/config@0.7.2",
     "@paimaexample/log": "jsr:@paimaexample/log@0.7.2",
     "@paimaexample/orchestrator": "jsr:@paimaexample/orchestrator@0.7.2",
+    "@paimaexample/midnight-contracts": "jsr:@paimaexample/midnight-contracts@0.7.2",
+    "@paimaexample/npm-midnight-node": "npm:@paimaexample/npm-midnight-node@0.7.2",
+    "@paimaexample/npm-midnight-indexer": "npm:@paimaexample/npm-midnight-indexer@0.7.2",
+    "@paimaexample/npm-midnight-proof-server": "npm:@paimaexample/npm-midnight-proof-server@0.7.2",
     "@paimaexample/runtime": "jsr:@paimaexample/runtime@0.7.2",
     "@paimaexample/tui": "jsr:@paimaexample/tui@0.7.2",
     "@paimaexample/utils": "jsr:@paimaexample/utils@0.7.2",
@@ -33,6 +40,12 @@
     "@sinclair/typebox": "npm:@sinclair/typebox@^0.34.30",
     "effection": "npm:effection@^3.5.0",
     "@paimaexample/explorer": "npm:@paimaexample/explorer@0.7.2",
+    "@midnight-ntwrk/onchain-runtime": "npm:@midnight-ntwrk/onchain-runtime-v2@2.0.0",
+    "@midnight-ntwrk/compact-runtime": "npm:@midnight-ntwrk/compact-runtime@0.14.0",
+    "@midnight-ntwrk/wallet-sdk-address-format": "npm:@midnight-ntwrk/wallet-sdk-address-format@3.0.0",
+    "@midnight-ntwrk/ledger": "npm:@midnight-ntwrk/ledger-v7@7.0.0",
+    "@midnight-ntwrk/ledger-v7": "npm:@midnight-ntwrk/ledger-v7@7.0.0",
+    "@midnight-ntwrk/zswap": "npm:@midnight-ntwrk/zswap@4.0.0",
     "@types/node": "npm:@types/node@^20.0.0"
   }
 }

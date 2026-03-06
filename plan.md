@@ -129,3 +129,93 @@ Points can be used for:
 * Visible countdown timers  
 * Immutable result once resolved
 
+
+# ** Implementation **
+
+## ** Contract **
+
+The betting logic and token balances are represented in a single Midnight contract written in Compact (`PredictionMarket.compact`).
+
+### **Ledger State**
+
+```
+ledger resolverKey: ZswapCoinPublicKey        // set at deploy time from env var; only this key can resolve markets
+ledger markets: Map<Bytes<32>, Market>        // keyed by marketId (hash of title+timestamp)
+ledger bets: Map<Bytes<32>, Bet>              // keyed by hash(marketId, userKey)
+ledger balances: Map<ZswapCoinPublicKey, Uint<128>>  // fungible point token balances
+```
+
+### **Structs**
+
+```
+struct Market {
+  status: Uint<8>              // 0=open, 1=closed, 2=resolved
+  resolvedOptionId: Bytes<32>  // set on resolution
+  totalStaked: Uint<128>       // total points staked across all options
+}
+
+struct Bet {
+  user: ZswapCoinPublicKey
+  optionId: Bytes<32>
+  amount: Uint<128>
+  claimed: Boolean
+}
+```
+
+### **Circuits**
+
+- `placeBet(marketId, optionId, userKey, amount)` — batcher submits on behalf of user; deducts from user balance; asserts market is open and user has no existing bet on this market
+- `resolveMarket(marketId, winningOptionId)` — asserts `ownPublicKey() == resolverKey`; marks market resolved
+- `claimWinnings(marketId)` — user calls directly; asserts market is resolved and caller won; mints proportional payout to caller's balance; marks bet as claimed
+
+### **Resolver Key**
+
+The resolver key (`resolverKey`) is the `ZswapCoinPublicKey` derived from the batcher's `MIDNIGHT_SEED` env var. It is passed as a constructor argument at deploy time — no key material is hardcoded in the contract. The Paima node's state machine triggers resolution by submitting a `resolveMarket` circuit call through the batcher when an admin sends a `resolveMarket` Paima command.
+
+### **Token Mechanics**
+
+- Tokens are fungible point balances stored in the contract ledger (not a separate ERC-20 contract)
+- New users receive 1000 points minted to their balance at registration
+- Winning payout is proportional: `winnerStake / totalWinnerStake * totalPoolStaked`
+- Losing bets forfeit their stake (no refund)
+- Tokens can be used for future bets (spent from ledger balance)
+
+## ** Batcher **
+
+To simplify engagement and eliminate the need for users to hold dust (the token needed to pay gas for Midnight transactions), a batcher application in the backend handles all blockchain interactions on behalf of users.
+
+The batcher pattern is modeled on the night-bitcoin template:
+> https://github.com/PaimaStudios/paima-engine/tree/v-next/templates/night-bitcoin
+
+The batcher holds a funded Midnight wallet (seed from `MIDNIGHT_SEED` env var). When a user places a bet via the frontend, the Paima node processes the intent and the batcher submits the `placeBet` circuit call to the Midnight contract, passing the user's `ZswapCoinPublicKey` explicitly as a parameter (since `ownPublicKey()` inside the circuit would return the batcher's key, not the user's).
+
+### **Dividing Up Winnings**
+
+Compact `for` loops require a hardcoded constant iteration count — you cannot loop over an unbounded number of winners. This rules out a "distribute to all" circuit.
+
+**Solution: user-initiated claims.** After a market is resolved, each winning user calls `claimWinnings(marketId)` themselves. This is a single circuit call per user, which is acceptable. The batcher can optionally assist with this call as well (same gasless UX). The `claimed` flag on each `Bet` struct prevents double-claiming.
+
+## ** File Structure **
+
+The batcher lives under `packages/client/batcher/` following the go-fish pattern (no separate `filler/` directory).
+
+```
+packages/
+  shared/
+    contracts/
+      midnight/
+        prediction-market-contract/
+          src/
+            PredictionMarket.compact   # main contract
+          deno.json
+  client/
+    batcher/
+      src/
+        main.ts                        # batcher process
+        config.ts                      # reads MIDNIGHT_SEED, contract address
+        adapter-midnight.ts            # Midnight adapter wiring
+    node/
+      src/
+        state-machine.ts               # handles placeBet, resolveMarket commands
+        api.ts                         # REST endpoints
+```

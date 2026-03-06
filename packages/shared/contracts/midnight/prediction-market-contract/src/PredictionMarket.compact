@@ -1,0 +1,330 @@
+pragma language_version >= 0.19.0;
+
+// ============================================
+// PREDICTION MARKET CONTRACT
+// ============================================
+//
+// A prediction market where users stake points on outcomes.
+//
+// ARCHITECTURE:
+//   - A batcher (funded Midnight wallet) submits transactions on behalf of users.
+//   - The batcher passes the user's ZswapCoinPublicKey explicitly as a parameter,
+//     since ownPublicKey() inside a circuit returns the batcher's key.
+//   - The resolver key is set at deploy time from an env var (MIDNIGHT_SEED).
+//     Only this key may call resolveMarket().
+//   - Winnings are claimed individually by each user (avoids the Compact
+//     for-loop constant-bound limitation).
+//
+// Market status values: 0=open, 1=closed, 2=resolved
+// Starting balance minted to new users: 1000 points
+//
+// ============================================
+
+import CompactStandardLibrary;
+
+// ============================================
+// STRUCTS
+// ============================================
+
+struct Market {
+  status: Uint<8>,
+  resolvedOptionId: Bytes<32>,
+  totalStaked: Uint<128>,
+  winnerTotalStaked: Uint<128>
+}
+
+struct Bet {
+  optionId: Bytes<32>,
+  amount: Uint<128>,
+  claimed: Boolean
+}
+
+// ============================================
+// LEDGER STATE
+// ============================================
+
+// Set once at deploy time; only this key may call resolveMarket / closeMarket / createMarket
+export ledger resolverKey: ZswapCoinPublicKey;
+
+// Whether the contract has been initialized
+export ledger initialized: Boolean;
+
+// Point token balances per user
+export ledger balances: Map<ZswapCoinPublicKey, Uint<128>>;
+
+// Markets keyed by marketId (Bytes<32>)
+export ledger markets: Map<Bytes<32>, Market>;
+
+// Bets keyed by persistentHash([marketId, hash(userKey)])
+export ledger bets: Map<Bytes<32>, Bet>;
+
+// Per-option staking totals keyed by persistentHash([marketId, optionId])
+export ledger optionStakes: Map<Bytes<32>, Uint<128>>;
+
+// ============================================
+// INTERNAL HELPERS
+// ============================================
+
+circuit betKey(marketId: Bytes<32>, userKey: ZswapCoinPublicKey): Bytes<32> {
+  const keyHash = persistentHash<ZswapCoinPublicKey>(disclose(userKey));
+  return persistentHash<[Bytes<32>, Bytes<32>]>([disclose(marketId), keyHash]);
+}
+
+circuit optionKey(marketId: Bytes<32>, optionId: Bytes<32>): Bytes<32> {
+  return persistentHash<[Bytes<32>, Bytes<32>]>([disclose(marketId), disclose(optionId)]);
+}
+
+circuit getBalanceInternal(userKey: ZswapCoinPublicKey): Uint<128> {
+  if (!balances.member(disclose(userKey))) {
+    return 0;
+  }
+  return balances.lookup(disclose(userKey));
+}
+
+circuit getOptionStakeInternal(marketId: Bytes<32>, optionId: Bytes<32>): Uint<128> {
+  const key = optionKey(disclose(marketId), disclose(optionId));
+  if (!optionStakes.member(key)) {
+    return 0;
+  }
+  return optionStakes.lookup(key);
+}
+
+// ============================================
+// SETUP
+// ============================================
+
+export circuit initialize(resolverKey_: ZswapCoinPublicKey): [] {
+  assert(!initialized, "Contract already initialized");
+  initialized = true;
+  resolverKey = disclose(resolverKey_);
+}
+
+// ============================================
+// USER REGISTRATION
+// ============================================
+
+// Register a new user and mint their starting 1000-point balance.
+// Idempotent: safe to call multiple times (subsequent calls are no-ops).
+export circuit registerUser(userKey: ZswapCoinPublicKey): [] {
+  assert(initialized, "Contract not initialized");
+  const key = disclose(userKey);
+  if (!balances.member(key)) {
+    balances.insert(key, 1000 as Uint<128>);
+  }
+}
+
+// ============================================
+// ADMIN: MARKET MANAGEMENT
+// ============================================
+
+export circuit createMarket(marketId: Bytes<32>): [] {
+  assert(initialized, "Contract not initialized");
+  assert(ownPublicKey() == resolverKey, "Only resolver may create markets");
+  const mid = disclose(marketId);
+  assert(!markets.member(mid), "Market already exists");
+  markets.insert(mid, Market {
+    status: 0 as Uint<8>,
+    resolvedOptionId: default<Bytes<32>>,
+    totalStaked: 0 as Uint<128>,
+    winnerTotalStaked: 0 as Uint<128>
+  });
+}
+
+export circuit closeMarket(marketId: Bytes<32>): [] {
+  assert(initialized, "Contract not initialized");
+  assert(ownPublicKey() == resolverKey, "Only resolver may close markets");
+  const mid = disclose(marketId);
+  assert(markets.member(mid), "Market does not exist");
+  const m = markets.lookup(mid);
+  assert(m.status == 0 as Uint<8>, "Market is not open");
+  markets.insert(mid, Market {
+    status: 1 as Uint<8>,
+    resolvedOptionId: m.resolvedOptionId,
+    totalStaked: m.totalStaked,
+    winnerTotalStaked: m.winnerTotalStaked
+  });
+}
+
+export circuit resolveMarket(marketId: Bytes<32>, winningOptionId: Bytes<32>): [] {
+  assert(initialized, "Contract not initialized");
+  assert(ownPublicKey() == resolverKey, "Only resolver may resolve markets");
+  const mid = disclose(marketId);
+  assert(markets.member(mid), "Market does not exist");
+  const m = markets.lookup(mid);
+  assert(m.status != 2 as Uint<8>, "Market already resolved");
+  const winnerStake = getOptionStakeInternal(mid, disclose(winningOptionId));
+  markets.insert(mid, Market {
+    status: 2 as Uint<8>,
+    resolvedOptionId: disclose(winningOptionId),
+    totalStaked: m.totalStaked,
+    winnerTotalStaked: winnerStake
+  });
+}
+
+// ============================================
+// USER: PLACE BET
+// ============================================
+
+export circuit placeBet(
+  marketId: Bytes<32>,
+  optionId: Bytes<32>,
+  userKey: ZswapCoinPublicKey,
+  amount: Uint<128>
+): [] {
+  assert(initialized, "Contract not initialized");
+
+  const mid = disclose(marketId);
+  assert(markets.member(mid), "Market does not exist");
+  const m = markets.lookup(mid);
+  assert(m.status == 0 as Uint<8>, "Market is not open for betting");
+  assert(disclose(amount) > 0 as Uint<128>, "Bet amount must be positive");
+
+  const key = disclose(userKey);
+  assert(balances.member(key), "User not registered");
+  const balance = balances.lookup(key);
+  assert(balance >= disclose(amount), "Insufficient balance");
+
+  const bk = betKey(mid, disclose(userKey));
+  assert(!bets.member(bk), "User already has a bet on this market");
+
+  balances.insert(key, (balance - disclose(amount)) as Uint<128>);
+
+  bets.insert(bk, Bet {
+    optionId: disclose(optionId),
+    amount: disclose(amount),
+    claimed: false
+  });
+
+  markets.insert(mid, Market {
+    status: m.status,
+    resolvedOptionId: m.resolvedOptionId,
+    totalStaked: (m.totalStaked + disclose(amount)) as Uint<128>,
+    winnerTotalStaked: m.winnerTotalStaked
+  });
+
+  const ok = optionKey(mid, disclose(optionId));
+  const currentOptionStake = getOptionStakeInternal(mid, disclose(optionId));
+  optionStakes.insert(ok, (currentOptionStake + disclose(amount)) as Uint<128>);
+}
+
+// ============================================
+// USER: CLAIM WINNINGS
+// ============================================
+
+// Payout formula: floor(userStake * totalStaked / winnerTotalStaked)
+//
+// Compact has no division operator. The payout is computed off-chain by the
+// witness function `compute_payout` and passed in as `payoutWitness`.
+// The contract verifies it on-chain:
+//   payoutWitness * winnerTotalStaked <= userStake * totalStaked   (no overpayment)
+//   (payoutWitness + 1) * winnerTotalStaked > userStake * totalStaked  (floor, not ceiling)
+export circuit claimWinnings(
+  marketId: Bytes<32>,
+  userKey: ZswapCoinPublicKey,
+  payoutWitness: Uint<128>,
+  remainderWitness: Uint<128>
+): [] {
+  assert(initialized, "Contract not initialized");
+
+  const mid = disclose(marketId);
+  assert(markets.member(mid), "Market does not exist");
+  const m = markets.lookup(mid);
+  assert(m.status == 2 as Uint<8>, "Market not yet resolved");
+
+  const bk = betKey(mid, disclose(userKey));
+  assert(bets.member(bk), "No bet found for user on this market");
+  const b = bets.lookup(bk);
+
+  assert(!b.claimed, "Winnings already claimed");
+  assert(b.optionId == m.resolvedOptionId, "User did not pick the winning option");
+  assert(m.winnerTotalStaked > 0 as Uint<128>, "Winner stake is zero");
+
+  // Compact has no division operator. The payout is computed off-chain and passed in.
+  // We verify correctness using the floor-division identity:
+  //   payout = floor(userStake * totalStaked / winnerTotalStaked)
+  // which is equivalent to:
+  //   payout * winnerTotalStaked <= userStake * totalStaked < (payout+1) * winnerTotalStaked
+  //
+  // To avoid overflow (128*128 bits), we cap all values at Uint<64> range in practice
+  // (points are small numbers). We accept this constraint for the demo.
+  // If larger values are ever needed, the payout can be computed and stored by the
+  // resolveMarket circuit instead.
+  //
+  // For correctness with reasonable point values (up to ~10^9), we verify using
+  // the equivalent remainder form: userStake * totalStaked == payout * winnerTotalStaked + remainder
+  // rewritten to avoid overflow by asserting all terms fit in Uint<64>.
+  const payout = disclose(payoutWitness);
+  const remainder = disclose(remainderWitness);
+  // Verify floor division: payout * winnerStake + remainder == userStake * totalStaked
+  // All values are bounded by Uint<64> for safety (balances stay well under 2^63).
+  const lhs = (payout as Uint<64>) * (m.winnerTotalStaked as Uint<64>) + (remainder as Uint<64>);
+  const rhs = (b.amount as Uint<64>) * (m.totalStaked as Uint<64>);
+  assert(lhs == rhs, "Invalid payout witness");
+  assert(remainder < m.winnerTotalStaked, "Invalid remainder witness");
+
+  bets.insert(bk, Bet {
+    optionId: b.optionId,
+    amount: b.amount,
+    claimed: true
+  });
+
+  const key = disclose(userKey);
+  const currentBalance = getBalanceInternal(disclose(userKey));
+  balances.insert(key, (currentBalance + payout) as Uint<128>);
+}
+
+// ============================================
+// QUERIES
+// ============================================
+
+export circuit getBalance(userKey: ZswapCoinPublicKey): Uint<128> {
+  return getBalanceInternal(disclose(userKey));
+}
+
+export circuit getMarketStatus(marketId: Bytes<32>): Uint<8> {
+  const mid = disclose(marketId);
+  if (!markets.member(mid)) {
+    return 255 as Uint<8>;
+  }
+  return markets.lookup(mid).status;
+}
+
+export circuit getMarketTotalStaked(marketId: Bytes<32>): Uint<128> {
+  const mid = disclose(marketId);
+  if (!markets.member(mid)) {
+    return 0 as Uint<128>;
+  }
+  return markets.lookup(mid).totalStaked;
+}
+
+export circuit getWinnerStakeForOption(marketId: Bytes<32>, optionId: Bytes<32>): Uint<128> {
+  return getOptionStakeInternal(disclose(marketId), disclose(optionId));
+}
+
+export circuit getBetAmount(marketId: Bytes<32>, userKey: ZswapCoinPublicKey): Uint<128> {
+  const bk = betKey(disclose(marketId), disclose(userKey));
+  if (!bets.member(bk)) {
+    return 0 as Uint<128>;
+  }
+  return bets.lookup(bk).amount;
+}
+
+export circuit getBetOptionId(marketId: Bytes<32>, userKey: ZswapCoinPublicKey): Bytes<32> {
+  const bk = betKey(disclose(marketId), disclose(userKey));
+  if (!bets.member(bk)) {
+    return default<Bytes<32>>;
+  }
+  return bets.lookup(bk).optionId;
+}
+
+export circuit isBetClaimed(marketId: Bytes<32>, userKey: ZswapCoinPublicKey): Boolean {
+  const bk = betKey(disclose(marketId), disclose(userKey));
+  if (!bets.member(bk)) {
+    return false;
+  }
+  return bets.lookup(bk).claimed;
+}
+
+export circuit isUserRegistered(userKey: ZswapCoinPublicKey): Boolean {
+  return balances.member(disclose(userKey));
+}

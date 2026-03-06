@@ -1,6 +1,7 @@
 /**
  * Development configuration for Paima Engine
- * Uses NTP for main timing and EVM for game inputs
+ * Phase 1: NTP-only (no EVM, no Midnight contract yet).
+ * Phase 2 will add a Midnight parallel sync protocol and primitives.
  */
 
 import {
@@ -8,64 +9,29 @@ import {
   ConfigNetworkType,
   ConfigSyncProtocolType,
 } from "@paimaexample/config";
-import { PrimitiveTypeEVMPaimaL2 } from "@paimaexample/sm/builtin";
-import { hardhat } from "viem/chains";
-import { grammar } from "@prediction-market/data-types/grammar";
-
-const mainSyncProtocolName = "mainNtp";
 
 export const config = new ConfigBuilder()
   .setNamespace((builder) => builder.setSecurityNamespace("[prediction-market]"))
   .buildNetworks((builder) =>
-    builder
-      .addNetwork({
-        name: "ntp",
-        type: ConfigNetworkType.NTP,
-        startTime: new Date().getTime(),
-        blockTimeMS: 1000,
-      })
-      .addViemNetwork({
-        ...hardhat,
-        name: "evmMain",
-      })
+    builder.addNetwork({
+      name: "ntp",
+      type: ConfigNetworkType.NTP,
+      startTime: new Date().getTime(),
+      blockTimeMS: 1000,
+    })
   )
   .buildDeployments((builder) => builder)
   .buildSyncProtocols((builder) =>
-    builder
-      .addMain(
-        (networks) => networks.ntp,
-        (network, deployments) => ({
-          name: mainSyncProtocolName,
-          type: ConfigSyncProtocolType.NTP_MAIN,
-          chainUri: "",
-          startBlockHeight: 1,
-          pollingInterval: 3000,
-        })
-      )
-      .addParallel(
-        (networks) => networks.evmMain,
-        (network, deployments) => ({
-          name: "mainEvmRPC",
-          type: ConfigSyncProtocolType.EVM_RPC_PARALLEL,
-          chainUri: network.rpcUrls.default.http[0],
-          startBlockHeight: 1,
-          pollingInterval: 3000,
-          confirmationDepth: 1,
-        })
-      )
-  )
-  .buildPrimitives((builder) =>
-    builder.addPrimitive(
-      (syncProtocols) => syncProtocols.mainEvmRPC,
-      (network, deployments, syncProtocol) => ({
-        name: "PredictionMarket_PaimaL2",
-        type: PrimitiveTypeEVMPaimaL2,
-        startBlockHeight: Number(Deno.env.get("PAIMA_L2_START_BLOCK") || "0"),
-        contractAddress:
-          Deno.env.get("PAIMA_L2_CONTRACT_ADDRESS") ||
-          "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
-        paimaL2Grammar: grammar,
+    builder.addMain(
+      (networks) => networks.ntp,
+      (_network, _deployments) => ({
+        name: "mainNtp",
+        type: ConfigSyncProtocolType.NTP_MAIN,
+        chainUri: "",
+        startBlockHeight: 1,
+        pollingInterval: 3000,
       })
     )
   )
+  .buildPrimitives((builder) => builder)
   .build();

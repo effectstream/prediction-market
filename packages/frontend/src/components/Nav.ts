@@ -1,4 +1,5 @@
 import type { AppScreen, UserProfile } from "../types.ts";
+import { renderLogoCanvas } from "./Logo.ts";
 
 interface NavProps {
   currentScreen: AppScreen;
@@ -39,7 +40,7 @@ export function renderNav(props: NavProps): string {
   return `
     <nav class="navbar">
       <div class="navbar-brand">
-        <span class="brand-icon">🌙</span>
+        ${renderLogoCanvas()}
         <span class="brand-name">Midnight<br/><small>Predictions</small></span>
       </div>
       <div class="nav-links">

@@ -1,0 +1,18 @@
+{
+  "name": "@prediction-market/midnight-contract",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./src/_index.ts",
+    "./witnesses": "./src/witnesses.ts",
+    "./contract": "./src/managed/contract/index.js"
+  },
+  "tasks": {
+    "compact": "rm -rf src/managed/contract src/managed/compiler src/managed/keys src/managed/zkir && mkdir -p src/managed && compact compile +0.29.0 src/PredictionMarket.compact src/managed",
+    "contract:compile": "deno task compact",
+    "test": "deno run -A --unstable-detect-cjs src/test-contract.ts"
+  },
+  "imports": {
+    "@midnight-ntwrk/compact-runtime": "npm:@midnight-ntwrk/compact-runtime@0.14.0",
+    "@midnight-ntwrk/onchain-runtime": "npm:@midnight-ntwrk/onchain-runtime-v2@2.0.0"
+  }
+}

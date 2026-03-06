@@ -7,7 +7,9 @@
     "dev": "deno task --filter @prediction-market/node dev",
     "testnet": "deno task --filter @prediction-market/node testnet",
     "frontend:dev": "cd packages/frontend && npm run dev",
-    "frontend:build": "cd packages/frontend && npm run build"
+    "frontend:build": "cd packages/frontend && npm run build",
+    "contract:test": "deno task --filter @prediction-market/midnight-contract test",
+    "contract:compile": "cd packages/shared/contracts/midnight/prediction-market-contract && deno task compact"
   },
   "imports": {
     "@prediction-market/data-types": "./packages/shared/data-types/deno.json"

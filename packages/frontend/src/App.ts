@@ -7,6 +7,7 @@ import { renderLeaderboardScreen } from "./screens/LeaderboardScreen.ts";
 import { renderProfileScreen } from "./screens/ProfileScreen.ts";
 import { renderNav } from "./components/Nav.ts";
 import { renderConnectBanner } from "./components/ConnectBanner.ts";
+import { initLogo } from "./components/Logo.ts";
 
 export class App {
   private state: AppState;
@@ -181,6 +182,7 @@ export class App {
     `;
 
     this.attachEventListeners();
+    initLogo(); // (re-)initialize 3D logo after each render
   }
 
   private attachEventListeners() {

@@ -1,0 +1,8 @@
+2026-03-05T14:42:49.266Z SYSTEM-LOG: Process collector (72423) finished.
+
+2026-03-05T14:42:49.280Z SYSTEM-LOG: Process pglite (72502) finished.
+
+2026-03-05T14:42:49.283Z SYSTEM-LOG: Non-critical process collector (72423) exited with status SIGTERM; keeping orchestrator alive.
+2026-03-05T14:42:49.284Z SYSTEM-LOG: Non-critical process loki (72404) exited with status SIGTERM; keeping orchestrator alive.
+2026-03-05T14:42:49.286Z SYSTEM-LOG: Process loki (72404) finished.
+
