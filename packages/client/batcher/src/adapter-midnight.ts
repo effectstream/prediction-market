@@ -34,7 +34,11 @@ const {
   zkConfigPath,
 } = readMidnightContract(
   "prediction-market-contract",
-  "prediction-market-contract.undeployed.json",
+  {
+    // Resolve relative to this file so the search works regardless of cwd
+    baseDir: new URL("../../../shared/contracts/midnight", import.meta.url).pathname,
+    networkId: networkID,
+  },
 );
 
 export const midnightAdapter = new MidnightAdapter(
