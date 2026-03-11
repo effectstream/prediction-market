@@ -842,3 +842,258 @@ img { display: block; max-width: 100%; }
   .nav-links { gap: 0; }
   .nav-link { padding: 8px 10px; }
 }
+
+/* ── Display Name Modal ───────────────────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.modal-box {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 32px;
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.modal-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.modal-subtitle {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin: 0;
+}
+
+.modal-input {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  color: var(--text-primary);
+  font-size: 15px;
+  width: 100%;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.modal-input:focus {
+  border-color: var(--accent);
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.btn-ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 10px 18px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: border-color 0.2s, color 0.2s;
+}
+
+.btn-ghost:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+/* ── Claim Banner ─────────────────────────────────────────────────────────── */
+.claim-banner {
+  background: linear-gradient(135deg, #1a4a1a, #2a6e2a);
+  border: 1px solid #3a8e3a;
+  border-radius: 10px;
+  padding: 14px 18px;
+  color: #90ee90;
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.claim-btn {
+  font-size: 12px !important;
+  padding: 5px 10px !important;
+  margin-top: 6px;
+}
+
+/* ── Admin Panel ──────────────────────────────────────────────────────────── */
+.screen-admin {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.admin-section {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 24px;
+}
+
+.admin-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-row label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.form-input {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  font-size: 14px;
+  width: 100%;
+  box-sizing: border-box;
+  outline: none;
+}
+
+.form-input:focus {
+  border-color: var(--accent);
+}
+
+.form-actions {
+  margin-top: 4px;
+}
+
+.admin-status {
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  min-height: 16px;
+}
+
+.admin-status--success {
+  background: rgba(58, 142, 58, 0.15);
+  color: #90ee90;
+  border: 1px solid #3a8e3a;
+}
+
+.admin-status--error {
+  background: rgba(180, 60, 60, 0.15);
+  color: #ff8080;
+  border: 1px solid #b43c3c;
+}
+
+.admin-markets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.admin-market-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.admin-market-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+}
+
+.admin-market-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.admin-market-id {
+  font-size: 11px;
+  color: var(--text-muted, #555);
+  font-family: monospace;
+}
+
+.admin-market-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.resolve-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.resolve-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.admin-resolve-btn {
+  font-size: 12px;
+}
+
+.btn-warning {
+  background: #7a4a00;
+  border: 1px solid #a06000;
+  color: #ffd080;
+}
+
+.btn-warning:hover {
+  background: #a06000;
+}
+
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.btn-outline:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.resolved-tag {
+  font-size: 12px;
+  color: #90ee90;
+}
+
+.empty-note {
+  color: var(--text-secondary);
+  font-size: 14px;
+}

@@ -1,4 +1,4 @@
-export function renderConnectBanner(onConnect: () => void): string {
+export function renderConnectBanner(): string {
   return `
     <div class="connect-banner">
       <span>🔮 Connect your wallet to place bets and track your predictions!</span>

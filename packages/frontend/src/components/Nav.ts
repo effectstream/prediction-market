@@ -32,7 +32,7 @@ export function renderNav(props: NavProps): string {
 
   const walletButton = walletConnected && userProfile
     ? `<div class="wallet-info">
-        <span class="points-badge">⚡ ${userProfile.points.toLocaleString()} pts</span>
+        <span class="points-badge">⚡ ${userProfile.tokens.toLocaleString()} tkn</span>
         <span class="wallet-addr">${userProfile.walletAddress.slice(0, 6)}...${userProfile.walletAddress.slice(-4)}</span>
       </div>`
     : `<button class="btn btn-primary btn-sm" data-connect-wallet>Connect Wallet</button>`;

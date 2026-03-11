@@ -1,31 +1,41 @@
 import type { Market, UserBet } from "../types.ts";
-import { formatTimeRemaining, formatPoints, pct, getCategoryColor } from "../utils.ts";
+import { formatTimeRemaining, formatTokens, getCategoryColor } from "../utils.ts";
+import { getLocalBetOption } from "../api-client.ts";
 
 interface MarketDetailProps {
   market: Market;
   existingBet?: UserBet;
   walletConnected: boolean;
+  walletAddress?: string;
   userPoints: number;
   onPlaceBet: (optionId: string, amount: number) => void;
   onBack: () => void;
 }
 
 export function renderMarketDetailScreen(props: MarketDetailProps): string {
-  const { market, existingBet, walletConnected, userPoints } = props;
+  const { market, existingBet, walletConnected, walletAddress, userPoints } = props;
 
   if (!market) {
     return `<div class="empty-state">Market not found. <a href="#" data-back>← Back</a></div>`;
   }
 
-  const totalStaked = market.options.reduce((s, o) => s + o.totalStaked, 0);
   const isOpen = market.status === "open";
   const canBet = isOpen && walletConnected && !existingBet;
 
+  // Resolve the user's option from localStorage (option choice is private — not in existingBet)
+  const localBet = walletAddress
+    ? getLocalBetOption(market.marketId, walletAddress)
+    : null;
+  const myOptionId = localBet?.optionId ?? null;
+  const myOptionLabel = myOptionId
+    ? (market.options.find((o) => o.optionId === myOptionId)?.label ?? myOptionId)
+    : null;
+
+  // Option rows — per-option stakes are hidden (private bets)
   const optionBars = market.options
     .map((opt) => {
-      const percent = pct(opt.totalStaked, totalStaked);
       const isWinner = market.resolvedOption === opt.optionId;
-      const isMyBet = existingBet?.optionId === opt.optionId;
+      const isMyBet = myOptionId === opt.optionId;
 
       return `
         <div class="option-row ${canBet ? "option-row--selectable" : ""} ${isMyBet ? "option-row--my-bet" : ""} ${isWinner ? "option-row--winner" : ""}"
@@ -34,13 +44,9 @@ export function renderMarketDetailScreen(props: MarketDetailProps): string {
             <div class="option-label-row">
               <span class="option-label">${opt.label}</span>
               ${isWinner ? `<span class="winner-tag">✅ Winner</span>` : ""}
-              ${isMyBet ? `<span class="my-bet-tag">🎯 Your bet</span>` : ""}
+              ${isMyBet ? `<span class="my-bet-tag">🎯 Your pick</span>` : ""}
             </div>
-            <div class="option-meta">${opt.betCount} bets · ${formatPoints(opt.totalStaked)} pts staked</div>
-          </div>
-          <div class="option-bar-wrap">
-            <div class="option-bar" style="width: ${percent}%"></div>
-            <span class="option-pct">${percent}%</span>
+            <div class="option-meta option-meta--private">🔒 Stakes hidden · ZK private</div>
           </div>
         </div>
       `;
@@ -58,15 +64,27 @@ export function renderMarketDetailScreen(props: MarketDetailProps): string {
     }
 
     if (existingBet) {
+      const receiptData = localBet
+        ? JSON.stringify({ optionId: localBet.optionId, blinding: localBet.blinding })
+        : null;
+
       return `
         <div class="bet-section bet-section--placed">
           <div class="placed-bet-info">
             <span class="placed-bet-icon">🎯</span>
             <div>
               <strong>Bet placed!</strong>
-              <p>You bet <strong>${existingBet.amount} pts</strong> on <strong>${existingBet.optionLabel}</strong></p>
+              <p>You bet <strong>${existingBet.amount} tkn</strong>${myOptionLabel ? ` on <strong>${myOptionLabel}</strong>` : ""}</p>
+              <p class="privacy-note">🔒 Your option is private — proven by zero-knowledge proof</p>
             </div>
           </div>
+          ${receiptData ? `
+            <details class="claim-receipt">
+              <summary>🔑 Save your claim receipt</summary>
+              <p class="claim-receipt-warning">⚠️ If you clear browser storage, you'll need this to claim your winnings.</p>
+              <code class="claim-receipt-code">${receiptData}</code>
+            </details>
+          ` : ""}
           <p class="bet-result-hint">Results will be announced on Discord. Good luck! 🍀</p>
         </div>
       `;
@@ -87,7 +105,7 @@ export function renderMarketDetailScreen(props: MarketDetailProps): string {
         <button class="bet-amount-btn ${userPoints < amt ? "disabled" : ""}"
                 data-bet-amount="${amt}"
                 ${userPoints < amt ? "disabled" : ""}>
-          ${amt} pts
+          ${amt} tkn
         </button>
       `
       )
@@ -95,8 +113,9 @@ export function renderMarketDetailScreen(props: MarketDetailProps): string {
 
     return `
       <div class="bet-section">
-        <h3 class="bet-section-title">Place Your Bet</h3>
+        <h3 class="bet-section-title">Place Your Bet <span class="privacy-badge">🔒 ZK Private</span></h3>
         <p class="bet-section-hint">Select an option above, then choose your stake amount below.</p>
+        <p class="privacy-hint">Your choice is hidden on-chain using a zero-knowledge proof. Only you can reveal it.</p>
         <div class="bet-amounts">
           ${amountButtons}
         </div>
@@ -104,9 +123,9 @@ export function renderMarketDetailScreen(props: MarketDetailProps): string {
           <button class="btn btn-primary btn-lg" data-place-bet>
             Confirm Bet 🎲
           </button>
-          <span class="user-points">Your balance: <strong>${userPoints.toLocaleString()} pts</strong></span>
+          <span class="user-points">Your balance: <strong>${userPoints.toLocaleString()} tkn</strong></span>
         </div>
-        <p class="bet-disclaimer">⚠️ For fun only — no real money involved. One bet per market.</p>
+        <p class="bet-disclaimer">⚠️ For fun only — no real money involved. One bet per market. Winners receive 2× their stake.</p>
       </div>
     `;
   })();
@@ -132,7 +151,9 @@ export function renderMarketDetailScreen(props: MarketDetailProps): string {
         <div class="detail-stats">
           <span>${market.totalBets} total bets</span>
           <span>·</span>
-          <span>${formatPoints(totalStaked)} pts staked</span>
+          <span>${formatTokens(market.totalBets * 25)} tkn staked</span>
+          <span>·</span>
+          <span>🔒 Option distribution hidden</span>
         </div>
       </div>
 

@@ -9,6 +9,7 @@ import { Type } from "@sinclair/typebox";
 const WalletAddress = Type.String({ minLength: 1, maxLength: 100 });
 const MarketID = Type.String({ minLength: 1, maxLength: 100 });
 const OptionID = Type.String({ minLength: 1, maxLength: 100 });
+const HexBytes32 = Type.String({ minLength: 64, maxLength: 64 }); // hex-encoded Bytes<32>
 const BetAmount = Type.Union([
   Type.Literal(10),
   Type.Literal(25),
@@ -22,12 +23,14 @@ const CloseTime = Type.String({ minLength: 1, maxLength: 50 }); // ISO timestamp
 
 export const predictionMarketGrammar = {
   /**
-   * Place Bet: b|marketId|optionId|amount
-   * Example: b|market_001|option_a|25
+   * Place Bet: b|marketId|commitment|amount
+   * commitment is a 64-char hex string = persistentHash([optionId, blinding])
+   * computed client-side; optionId is never sent to the server.
+   * Example: b|market_001|a3f8...d912|25
    */
   placedBet: [
     ["marketId", MarketID],
-    ["optionId", OptionID],
+    ["commitment", HexBytes32],
     ["amount", BetAmount],
   ],
 
@@ -76,12 +79,15 @@ export const predictionMarketGrammar = {
   ],
 
   /**
-   * Claim Winnings: cw|marketId
-   * Example: cw|market_001
-   * The node computes the payout witness and submits to the Midnight batcher.
+   * Claim Winnings: cw|marketId|optionId|blinding
+   * optionId and blinding come from the user's localStorage (never stored server-side).
+   * The batcher passes them as private ZK witnesses to claimWinnings().
+   * Example: cw|market_001|yes|7c4a...b831
    */
   claimedWinnings: [
     ["marketId", MarketID],
+    ["optionId", OptionID],
+    ["blinding", HexBytes32],
   ],
 } as const satisfies GrammarDefinition;
 

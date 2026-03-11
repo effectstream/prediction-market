@@ -173,44 +173,14 @@ export const apiRouter: StartConfigApiRouter = async (
         return reply.code(400).send({ error: "Market already resolved" });
       }
 
-      // Settle bets in Postgres
-      await db.query(`
-        WITH totals AS (
-          SELECT
-            SUM(total_staked) AS total_staked,
-            MAX(CASE WHEN option_id = $2 THEN total_staked ELSE 0 END) AS winner_staked
-          FROM market_options WHERE market_id = $1
-        )
-        UPDATE bets SET
-          status = CASE WHEN option_id = $2 THEN 'won' ELSE 'lost' END,
-          payout = CASE
-            WHEN option_id = $2 THEN
-              FLOOR(amount::numeric * t.total_staked / NULLIF(t.winner_staked, 0))::integer
-            ELSE 0
-          END,
-          resolved_at = CURRENT_TIMESTAMP
-        FROM totals t
-        WHERE market_id = $1 AND status = 'pending'
-      `, [marketId, winningOptionId]);
-
+      // With private bets, we don't know which bets won — the ZK contract enforces
+      // correctness at claim time. Only update the market status here.
       await db.query(
         `UPDATE markets
          SET status = 'resolved', resolved_option_id = $2, resolved_at = CURRENT_TIMESTAMP
          WHERE market_id = $1`,
         [marketId, winningOptionId],
       );
-
-      await db.query(`
-        UPDATE user_profiles up
-        SET points = points + b.payout,
-            total_won = total_won + 1,
-            updated_at = CURRENT_TIMESTAMP
-        FROM bets b
-        WHERE b.account_id = up.account_id
-          AND b.market_id = $1
-          AND b.status = 'won'
-          AND b.payout > 0
-      `, [marketId]);
 
       // Submit on-chain command
       const result = await sendToBatcher(
@@ -231,19 +201,23 @@ export const apiRouter: StartConfigApiRouter = async (
   // ── Bets ────────────────────────────────────────────────────────────────
 
   server.post("/api/bets", async (request, reply) => {
-    const { marketId, optionId, amount, walletAddress } = request.body as {
+    const { marketId, commitment, amount, walletAddress } = request.body as {
       marketId: string;
-      optionId: string;
+      commitment: string;   // 64-char hex = persistentHash([optionId, blinding]) — optionId stays private
       amount: number;
       walletAddress: string;
     };
 
-    if (!marketId || !optionId || !amount || !walletAddress) {
+    if (!marketId || !commitment || !amount || !walletAddress) {
       return reply.code(400).send({ error: "Missing required fields" });
     }
 
     if (![10, 25, 50].includes(amount)) {
       return reply.code(400).send({ error: "Invalid amount. Must be 10, 25, or 50" });
+    }
+
+    if (!/^[0-9a-f]{64}$/i.test(commitment)) {
+      return reply.code(400).send({ error: "Invalid commitment format (expected 64 hex chars)" });
     }
 
     const db = dbPool!;
@@ -267,8 +241,8 @@ export const apiRouter: StartConfigApiRouter = async (
       }
 
       const profile = await getUserProfile(db, accountId);
-      if (!profile || profile.points < amount) {
-        return reply.code(400).send({ error: "Insufficient points" });
+      if (!profile || profile.tokens < amount) {
+        return reply.code(400).send({ error: "Insufficient tokens" });
       }
 
       const existingBet = await db.query(
@@ -280,11 +254,11 @@ export const apiRouter: StartConfigApiRouter = async (
       }
 
       const betId = `bet_${marketId}_${accountId}_${Date.now()}`;
-      await placeBet(db, betId, marketId, optionId, accountId, amount);
+      await placeBet(db, betId, marketId, commitment, accountId, amount);
 
       // Submit on-chain command (state machine picks it up and calls batcher)
       const batcherResult = await sendToBatcher(
-        `b|${marketId}|${optionId}|${amount}`,
+        `b|${marketId}|${commitment}|${amount}`,
         walletAddress,
       );
       if (!batcherResult.success) {
@@ -302,11 +276,19 @@ export const apiRouter: StartConfigApiRouter = async (
 
   server.post("/api/bets/:marketId/claim", async (request, reply) => {
     const { marketId } = request.params as { marketId: string };
-    const { walletAddress } = request.body as { walletAddress: string };
+    const { walletAddress, optionId, blinding } = request.body as {
+      walletAddress: string;
+      optionId: string;    // private — comes from user's localStorage, never stored server-side
+      blinding: string;    // 64-char hex — private ZK witness
+    };
     const db = dbPool!;
 
-    if (!walletAddress) {
-      return reply.code(400).send({ error: "walletAddress is required" });
+    if (!walletAddress || !optionId || !blinding) {
+      return reply.code(400).send({ error: "walletAddress, optionId, and blinding are required" });
+    }
+
+    if (!/^[0-9a-f]{64}$/i.test(blinding)) {
+      return reply.code(400).send({ error: "Invalid blinding format (expected 64 hex chars)" });
     }
 
     try {
@@ -320,24 +302,29 @@ export const apiRouter: StartConfigApiRouter = async (
 
       const accountId = accountResult.rows[0].account_id;
 
+      // Check market is resolved and bet is unclaimed
+      const market = await getMarketById(db, marketId);
+      if (!market) return reply.code(404).send({ error: "Market not found" });
+      if (market.status !== "resolved") {
+        return reply.code(400).send({ error: "Market is not yet resolved" });
+      }
+
       const betResult = await db.query(
-        `SELECT b.status, b.payout FROM bets b
-         WHERE b.market_id = $1 AND b.account_id = $2`,
+        `SELECT amount, status FROM bets WHERE market_id = $1 AND account_id = $2`,
         [marketId, accountId],
       );
-
       if (betResult.rows.length === 0) {
         return reply.code(404).send({ error: "No bet found for this market" });
       }
 
       const bet = betResult.rows[0];
-      if (bet.status !== "won") {
-        return reply.code(400).send({ error: "Bet did not win or is not yet resolved" });
+      if (bet.status !== "pending") {
+        return reply.code(400).send({ error: "Winnings already claimed" });
       }
 
-      // Forward claimWinnings to Midnight batcher
-      // The MidnightAdapter reads on-chain state to compute payout/remainder witnesses
-      const result = await sendToBatcher(`cw|${marketId}`, walletAddress);
+      // Forward to Midnight batcher with optionId + blinding as private ZK witnesses.
+      // The ZK circuit verifies the commitment opening and winning option in zero-knowledge.
+      const result = await sendToBatcher(`cw|${marketId}|${optionId}|${blinding}`, walletAddress);
       if (!result.success) {
         console.warn("[API] claimWinnings batcher warn:", result.error);
         return reply.code(502).send({ error: `Batcher error: ${result.error}` });
@@ -345,7 +332,7 @@ export const apiRouter: StartConfigApiRouter = async (
 
       return {
         success: true,
-        payout: bet.payout,
+        payout: bet.amount * 2,
         transactionHash: result.transactionHash,
       };
     } catch (err) {
@@ -371,7 +358,7 @@ export const apiRouter: StartConfigApiRouter = async (
           profile: {
             walletAddress,
             displayName: null,
-            points: 1000,
+            tokens: 1000,
             discordLinked: false,
             discordUsername: null,
             totalBets: 0,
@@ -388,7 +375,7 @@ export const apiRouter: StartConfigApiRouter = async (
         profile: {
           walletAddress,
           displayName: profile?.display_name ?? null,
-          points: profile?.points ?? 1000,
+          tokens: profile?.tokens ?? 1000,
           discordLinked: profile?.discord_linked ?? false,
           discordUsername: profile?.discord_username ?? null,
           totalBets: profile?.total_bets ?? 0,
@@ -401,7 +388,7 @@ export const apiRouter: StartConfigApiRouter = async (
         profile: {
           walletAddress,
           displayName: null,
-          points: 1000,
+          tokens: 1000,
           discordLinked: false,
           discordUsername: null,
           totalBets: 0,
@@ -444,6 +431,129 @@ export const apiRouter: StartConfigApiRouter = async (
       console.warn("[API] leaderboard query failed:", (err as Error).message);
       return { leaderboard: [] };
     }
+  });
+
+  // ── Register display name ────────────────────────────────────────────────
+  // POST /api/register  { walletAddress, displayName }
+  // Submits a registeredUser command to the batcher so the state machine
+  // persists the display name in Postgres and on the Midnight ledger.
+
+  server.post("/api/register", async (request, reply) => {
+    const { walletAddress, displayName } = request.body as {
+      walletAddress: string;
+      displayName: string;
+    };
+
+    if (!walletAddress || !displayName) {
+      return reply.code(400).send({ error: "walletAddress and displayName are required" });
+    }
+    if (displayName.length > 30) {
+      return reply.code(400).send({ error: "displayName must be 30 characters or fewer" });
+    }
+
+    const input = `reg|${displayName}`;
+    const result = await sendToBatcher(input, walletAddress);
+    if (!result.success) {
+      console.warn("[API] register batcher warn:", result.error);
+    }
+    return { success: true, transactionHash: result.transactionHash };
+  });
+
+  // ── Discord OAuth ────────────────────────────────────────────────────────
+  // GET /api/auth/discord?wallet=0x...
+  // Redirects the browser to Discord's OAuth consent page.
+  // After approval Discord redirects back to /api/auth/discord/callback.
+
+  const DISCORD_CLIENT_ID = Deno.env.get("DISCORD_CLIENT_ID");
+  const DISCORD_CLIENT_SECRET = Deno.env.get("DISCORD_CLIENT_SECRET");
+  const DISCORD_REDIRECT_URI = Deno.env.get("DISCORD_REDIRECT_URI") ??
+    "http://localhost:9996/api/auth/discord/callback";
+  const FRONTEND_URL = Deno.env.get("FRONTEND_URL") ?? "http://localhost:3002";
+
+  server.get("/api/auth/discord", async (request, reply) => {
+    if (!DISCORD_CLIENT_ID) {
+      return reply.code(503).send({ error: "Discord OAuth not configured (set DISCORD_CLIENT_ID)" });
+    }
+    const { wallet } = request.query as { wallet?: string };
+    if (!wallet) return reply.code(400).send({ error: "wallet query param required" });
+
+    // Encode wallet address in the state param so we can retrieve it in the callback
+    const state = Buffer.from(JSON.stringify({ wallet })).toString("base64url");
+    const params = new URLSearchParams({
+      client_id: DISCORD_CLIENT_ID,
+      redirect_uri: DISCORD_REDIRECT_URI,
+      response_type: "code",
+      scope: "identify",
+      state,
+    });
+    return reply.redirect(`https://discord.com/api/oauth2/authorize?${params}`);
+  });
+
+  server.get("/api/auth/discord/callback", async (request, reply) => {
+    if (!DISCORD_CLIENT_ID || !DISCORD_CLIENT_SECRET) {
+      return reply.code(503).send({ error: "Discord OAuth not configured" });
+    }
+    const { code, state } = request.query as { code?: string; state?: string };
+    if (!code || !state) return reply.code(400).send({ error: "Missing code or state" });
+
+    let wallet: string;
+    try {
+      wallet = JSON.parse(Buffer.from(state, "base64url").toString()).wallet;
+    } catch {
+      return reply.code(400).send({ error: "Invalid state param" });
+    }
+
+    // Exchange code for access token
+    let tokenData: Record<string, unknown>;
+    try {
+      const tokenRes = await fetch("https://discord.com/api/oauth2/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: DISCORD_CLIENT_ID,
+          client_secret: DISCORD_CLIENT_SECRET,
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: DISCORD_REDIRECT_URI,
+        }),
+      });
+      tokenData = await tokenRes.json() as Record<string, unknown>;
+      if (!tokenRes.ok) throw new Error(String(tokenData.error_description ?? tokenData.error));
+    } catch (err) {
+      console.error("[API] Discord token exchange failed:", err);
+      return reply.redirect(`${FRONTEND_URL}?discord_error=token`);
+    }
+
+    // Fetch Discord user info
+    let discordUsername: string;
+    try {
+      const userRes = await fetch("https://discord.com/api/users/@me", {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` },
+      });
+      const user = await userRes.json() as Record<string, unknown>;
+      if (!userRes.ok) throw new Error("Failed to fetch Discord user");
+      discordUsername = user.global_name as string ?? user.username as string;
+    } catch (err) {
+      console.error("[API] Discord user fetch failed:", err);
+      return reply.redirect(`${FRONTEND_URL}?discord_error=user`);
+    }
+
+    // Persist via state machine command (fire-and-forget batcher call)
+    const input = `discord|${wallet}|${discordUsername}`;
+    sendToBatcher(input, wallet).catch((err: Error) =>
+      console.error("[API] Discord link batcher error:", err.message)
+    );
+
+    // Also update Postgres directly for immediate visibility
+    dbPool?.query(
+      `UPDATE user_profiles up
+       SET discord_username = $1, discord_linked = true, updated_at = CURRENT_TIMESTAMP
+       FROM effectstream.addresses a
+       WHERE a.account_id = up.account_id AND a.address = $2`,
+      [discordUsername, wallet],
+    ).catch((err: Error) => console.error("[API] Discord link db error:", err.message));
+
+    return reply.redirect(`${FRONTEND_URL}?discord_linked=1`);
   });
 
   console.log("Prediction Market API routes registered");

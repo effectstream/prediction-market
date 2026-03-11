@@ -12,11 +12,12 @@
  *
  * Command → Midnight circuit mapping:
  *   registeredUser  → registerUser(userKey)
- *   placedBet       → placeBet(marketId, optionId, userKey, amount)
+ *   placedBet       → placeBet(marketId, commitment, userKey, amount)
  *   createdMarket   → createMarket(marketId)       [resolver only]
  *   closedMarket    → closeMarket(marketId)        [resolver only]
  *   resolvedMarket  → resolveMarket(marketId, winningOptionId)  [resolver only]
- *   claimedWinnings → claimWinnings(marketId, userKey, payout, remainder)
+ *   claimedWinnings → claimWinnings(marketId, userKey, optionId, blinding)
+ *                     optionId + blinding are private ZK witnesses (never disclosed)
  *   linkedDiscord   → Postgres only, no Midnight circuit
  */
 
@@ -118,16 +119,17 @@ stm.addStateTransition("registeredUser", function* (data) {
  * placedBet — record in Postgres + place bet on Midnight
  */
 stm.addStateTransition("placedBet", function* (data) {
-  const { marketId, optionId, amount } = data.parsedInput;
+  const { marketId, commitment, amount } = data.parsedInput;
   const walletAddress = data.signerAddress!;
 
-  console.log(`[STM] placedBet wallet=${walletAddress} market=${marketId} option=${optionId} amount=${amount}`);
+  console.log(`[STM] placedBet wallet=${walletAddress} market=${marketId} commitment=${commitment.slice(0, 8)}... amount=${amount}`);
 
   const accountId = yield* getOrCreateAccountId(walletAddress);
   if (!accountId) return;
 
-  // Forward to Midnight batcher: placeBet(marketId, optionId, userKey, amount)
-  const input = `b|${marketId}|${optionId}|${amount}`;
+  // Forward to Midnight batcher: placeBet(marketId, commitment, userKey, amount)
+  // commitment is the only option-related value that touches the chain — optionId stays private
+  const input = `b|${marketId}|${commitment}|${amount}`;
   logBatcher("placedBet", input, sendToBatcher(input, walletAddress));
 });
 
@@ -178,7 +180,11 @@ stm.addStateTransition("closedMarket", function* (data) {
 
 /**
  * resolvedMarket — resolve market in Postgres + on Midnight (resolver only)
- * Settles all bets and credits winners in Postgres.
+ *
+ * With private bets, Postgres cannot determine winners (optionId is hidden).
+ * We only update the market status here. Bet settlement (payout + balance
+ * credit) happens in claimedWinnings when each user individually claims.
+ * The ZK contract enforces that only correct picks can claim.
  */
 stm.addStateTransition("resolvedMarket", function* (data) {
   const { marketId, winningOptionId } = data.parsedInput;
@@ -186,43 +192,13 @@ stm.addStateTransition("resolvedMarket", function* (data) {
 
   console.log(`[STM] resolvedMarket market=${marketId} winner=${winningOptionId}`);
 
-  // Settle bets in Postgres: mark won/lost, compute floor-division payout, credit balances
-  data.dbConn?.query(`
-    WITH totals AS (
-      SELECT
-        SUM(total_staked) AS total_staked,
-        MAX(CASE WHEN option_id = $2 THEN total_staked ELSE 0 END) AS winner_staked
-      FROM market_options WHERE market_id = $1
-    )
-    UPDATE bets SET
-      status = CASE WHEN option_id = $2 THEN 'won' ELSE 'lost' END,
-      payout = CASE
-        WHEN option_id = $2 THEN
-          FLOOR(amount::numeric * t.total_staked / NULLIF(t.winner_staked, 0))::integer
-        ELSE 0
-      END,
-      resolved_at = CURRENT_TIMESTAMP
-    FROM totals t
-    WHERE market_id = $1 AND status = 'pending'
-  `, [marketId, winningOptionId])
-    .then(() => data.dbConn?.query(
-      `UPDATE markets
-       SET status = 'resolved', resolved_option_id = $2, resolved_at = CURRENT_TIMESTAMP
-       WHERE market_id = $1`,
-      [marketId, winningOptionId],
-    ))
-    .then(() => data.dbConn?.query(`
-      UPDATE user_profiles up
-      SET points = points + b.payout,
-          total_won = total_won + 1,
-          updated_at = CURRENT_TIMESTAMP
-      FROM bets b
-      WHERE b.account_id = up.account_id
-        AND b.market_id = $1
-        AND b.status = 'won'
-        AND b.payout > 0
-    `, [marketId]))
-    .catch((err: Error) => console.error("[STM] resolvedMarket db error:", err.message));
+  // Update market status only — bets are settled individually at claim time
+  data.dbConn?.query(
+    `UPDATE markets
+     SET status = 'resolved', resolved_option_id = $2, resolved_at = CURRENT_TIMESTAMP
+     WHERE market_id = $1`,
+    [marketId, winningOptionId],
+  ).catch((err: Error) => console.error("[STM] resolvedMarket db error:", err.message));
 
   // Forward to Midnight batcher: resolveMarket(marketId, winningOptionId)
   const input = `rm|${marketId}|${winningOptionId}`;
@@ -230,12 +206,18 @@ stm.addStateTransition("resolvedMarket", function* (data) {
 });
 
 /**
- * claimedWinnings — forward claimWinnings to Midnight
- * Postgres payout already credited by resolvedMarket; this settles
- * the on-chain balance so users can withdraw via their Midnight wallet.
+ * claimedWinnings — settle bet in Postgres + submit ZK claim to Midnight
+ *
+ * The ZK circuit verifies (in zero-knowledge) that:
+ *   1. optionId + blinding correctly open the user's stored commitment
+ *   2. optionId equals the market's resolvedOptionId (correct pick)
+ * If the circuit accepts, payout = 2× stake is credited on-chain.
+ *
+ * Postgres is updated here (not at resolveMarket) because we don't know
+ * who won until they prove it via ZK. payout = amount * 2.
  */
 stm.addStateTransition("claimedWinnings", function* (data) {
-  const { marketId } = data.parsedInput;
+  const { marketId, optionId, blinding } = data.parsedInput;
   const walletAddress = data.signerAddress!;
 
   console.log(`[STM] claimedWinnings wallet=${walletAddress} market=${marketId}`);
@@ -243,8 +225,23 @@ stm.addStateTransition("claimedWinnings", function* (data) {
   const accountId = yield* getOrCreateAccountId(walletAddress);
   if (!accountId) return;
 
-  // The batcher's MidnightAdapter reads on-chain state to compute payout/remainder witnesses
-  const input = `cw|${marketId}`;
+  // Credit payout in Postgres at claim time
+  data.dbConn?.query(
+    `UPDATE bets SET status = 'claimed', payout = amount * 2, resolved_at = CURRENT_TIMESTAMP
+     WHERE market_id = $1 AND account_id = $2 AND status = 'pending'`,
+    [marketId, accountId],
+  ).then(() => data.dbConn?.query(
+    `UPDATE user_profiles
+     SET tokens = tokens + (SELECT amount * 2 FROM bets WHERE market_id = $1 AND account_id = $2),
+         total_won = total_won + 1,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE account_id = $2`,
+    [marketId, accountId],
+  )).catch((err: Error) => console.error("[STM] claimedWinnings db error:", err.message));
+
+  // Forward to Midnight batcher: claimWinnings(marketId, userKey, optionId, blinding)
+  // optionId and blinding are passed as private ZK witnesses — never disclosed on-chain
+  const input = `cw|${marketId}|${optionId}|${blinding}`;
   logBatcher("claimedWinnings", input, sendToBatcher(input, walletAddress));
 });
 

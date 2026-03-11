@@ -9,14 +9,10 @@ interface MarketCardProps {
 export function renderMarketCard({ market, existingBet }: MarketCardProps): string {
   const timeLabel = getTimeLabel(market);
   const statusBadge = getStatusBadge(market);
-  const totalStaked = market.options.reduce((s, o) => s + o.totalStaked, 0);
 
-  const topOption = [...market.options].sort((a, b) => b.totalStaked - a.totalStaked)[0];
-  const leadPercent =
-    totalStaked > 0 ? Math.round((topOption.totalStaked / totalStaked) * 100) : 0;
-
+  // Per-option stakes are hidden (private bets) — show only total bets count
   const betBadge = existingBet
-    ? `<div class="bet-badge">✅ Bet placed: ${existingBet.optionLabel} (${existingBet.amount} pts)</div>`
+    ? `<div class="bet-badge">✅ Bet placed: ${existingBet.amount} pts 🔒</div>`
     : "";
 
   const resolvedBanner =
@@ -46,12 +42,12 @@ export function renderMarketCard({ market, existingBet }: MarketCardProps): stri
           <span class="stat-label">bets</span>
         </div>
         <div class="market-stat">
-          <span class="stat-value">${formatPoints(totalStaked)}</span>
-          <span class="stat-label">staked</span>
+          <span class="stat-value">${market.options.length}</span>
+          <span class="stat-label">options</span>
         </div>
         <div class="market-stat">
-          <span class="stat-value leading">${topOption.label.split(" ")[0]}</span>
-          <span class="stat-label">leading (${leadPercent}%)</span>
+          <span class="stat-value">🔒</span>
+          <span class="stat-label">private bets</span>
         </div>
       </div>
       <div class="market-footer">

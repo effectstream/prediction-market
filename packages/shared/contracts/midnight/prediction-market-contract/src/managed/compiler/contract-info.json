@@ -136,6 +136,13 @@
           }
         },
         {
+          "name": "commitment",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
           "name": "optionId",
           "type": {
             "type-name": "Bytes",
@@ -297,7 +304,7 @@
           }
         },
         {
-          "name": "optionId",
+          "name": "optionId_",
           "type": {
             "type-name": "Bytes",
             "length": 32
@@ -344,7 +351,7 @@
       }
     },
     {
-      "name": "getBetOptionId",
+      "name": "getBetCommitment",
       "pure": false,
       "proof": true,
       "arguments": [
@@ -438,6 +445,24 @@
     }
   ],
   "witnesses": [
+    {
+      "name": "optionId",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "blinding",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    }
   ],
   "contracts": [
   ]

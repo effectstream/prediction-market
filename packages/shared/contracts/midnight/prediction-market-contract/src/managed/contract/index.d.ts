@@ -1,6 +1,8 @@
 import type * as __compactRuntime from '@midnight-ntwrk/compact-runtime';
 
 export type Witnesses<PS> = {
+  optionId(context: __compactRuntime.WitnessContext<Ledger, PS>): [PS, Uint8Array];
+  blinding(context: __compactRuntime.WitnessContext<Ledger, PS>): [PS, Uint8Array];
 }
 
 export type ImpureCircuits<PS> = {
@@ -17,6 +19,7 @@ export type ImpureCircuits<PS> = {
                 winningOptionId_0: Uint8Array): __compactRuntime.CircuitResults<PS, []>;
   placeBet(context: __compactRuntime.CircuitContext<PS>,
            marketId_0: Uint8Array,
+           commitment_0: Uint8Array,
            optionId_0: Uint8Array,
            userKey_0: { bytes: Uint8Array },
            amount_0: bigint): __compactRuntime.CircuitResults<PS, []>;
@@ -33,13 +36,13 @@ export type ImpureCircuits<PS> = {
                        marketId_0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
   getWinnerStakeForOption(context: __compactRuntime.CircuitContext<PS>,
                           marketId_0: Uint8Array,
-                          optionId_0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
+                          optionId__0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
   getBetAmount(context: __compactRuntime.CircuitContext<PS>,
                marketId_0: Uint8Array,
                userKey_0: { bytes: Uint8Array }): __compactRuntime.CircuitResults<PS, bigint>;
-  getBetOptionId(context: __compactRuntime.CircuitContext<PS>,
-                 marketId_0: Uint8Array,
-                 userKey_0: { bytes: Uint8Array }): __compactRuntime.CircuitResults<PS, Uint8Array>;
+  getBetCommitment(context: __compactRuntime.CircuitContext<PS>,
+                   marketId_0: Uint8Array,
+                   userKey_0: { bytes: Uint8Array }): __compactRuntime.CircuitResults<PS, Uint8Array>;
   isBetClaimed(context: __compactRuntime.CircuitContext<PS>,
                marketId_0: Uint8Array,
                userKey_0: { bytes: Uint8Array }): __compactRuntime.CircuitResults<PS, boolean>;
@@ -64,6 +67,7 @@ export type Circuits<PS> = {
                 winningOptionId_0: Uint8Array): __compactRuntime.CircuitResults<PS, []>;
   placeBet(context: __compactRuntime.CircuitContext<PS>,
            marketId_0: Uint8Array,
+           commitment_0: Uint8Array,
            optionId_0: Uint8Array,
            userKey_0: { bytes: Uint8Array },
            amount_0: bigint): __compactRuntime.CircuitResults<PS, []>;
@@ -80,13 +84,13 @@ export type Circuits<PS> = {
                        marketId_0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
   getWinnerStakeForOption(context: __compactRuntime.CircuitContext<PS>,
                           marketId_0: Uint8Array,
-                          optionId_0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
+                          optionId__0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
   getBetAmount(context: __compactRuntime.CircuitContext<PS>,
                marketId_0: Uint8Array,
                userKey_0: { bytes: Uint8Array }): __compactRuntime.CircuitResults<PS, bigint>;
-  getBetOptionId(context: __compactRuntime.CircuitContext<PS>,
-                 marketId_0: Uint8Array,
-                 userKey_0: { bytes: Uint8Array }): __compactRuntime.CircuitResults<PS, Uint8Array>;
+  getBetCommitment(context: __compactRuntime.CircuitContext<PS>,
+                   marketId_0: Uint8Array,
+                   userKey_0: { bytes: Uint8Array }): __compactRuntime.CircuitResults<PS, Uint8Array>;
   isBetClaimed(context: __compactRuntime.CircuitContext<PS>,
                marketId_0: Uint8Array,
                userKey_0: { bytes: Uint8Array }): __compactRuntime.CircuitResults<PS, boolean>;
@@ -123,11 +127,11 @@ export type Ledger = {
     isEmpty(): boolean;
     size(): bigint;
     member(key_0: Uint8Array): boolean;
-    lookup(key_0: Uint8Array): { optionId: Uint8Array,
+    lookup(key_0: Uint8Array): { commitment: Uint8Array,
                                  amount: bigint,
                                  claimed: boolean
                                };
-    [Symbol.iterator](): Iterator<[Uint8Array, { optionId: Uint8Array, amount: bigint, claimed: boolean }]>
+    [Symbol.iterator](): Iterator<[Uint8Array, { commitment: Uint8Array, amount: bigint, claimed: boolean }]>
   };
   optionStakes: {
     isEmpty(): boolean;

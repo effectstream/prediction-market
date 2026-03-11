@@ -14,9 +14,9 @@ export function formatTimeRemaining(closeTime: string): string {
   return `${minutes}m`;
 }
 
-export function formatPoints(points: number): string {
-  if (points >= 1000) return `${(points / 1000).toFixed(1)}k`;
-  return String(points);
+export function formatTokens(tokens: number): string {
+  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`;
+  return String(tokens);
 }
 
 export function truncateAddress(address: string): string {

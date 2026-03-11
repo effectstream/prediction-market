@@ -5,6 +5,7 @@ interface ProfileScreenProps {
   profile?: UserProfile;
   walletConnected: boolean;
   onConnectWallet: () => void;
+  onLinkDiscord: () => void;
 }
 
 export function renderProfileScreen(props: ProfileScreenProps): string {
@@ -46,8 +47,8 @@ export function renderProfileScreen(props: ProfileScreenProps): string {
 
       <div class="profile-stats">
         <div class="profile-stat">
-          <span class="stat-value">${profile.points.toLocaleString()}</span>
-          <span class="stat-label">⚡ Points</span>
+          <span class="stat-value">${profile.tokens.toLocaleString()}</span>
+          <span class="stat-label">⚡ Tokens</span>
         </div>
         <div class="profile-stat">
           <span class="stat-value">${profile.totalBets}</span>
@@ -72,16 +73,16 @@ export function renderProfileScreen(props: ProfileScreenProps): string {
               </div>`
             : `<div class="discord-unlinked">
                 <p>Link your Discord to appear on the leaderboard and earn exclusive roles!</p>
-                <a href="#" class="btn btn-discord">Link Discord Account</a>
+                <a href="#" class="btn btn-discord" data-link-discord>Link Discord Account</a>
               </div>`
         }
       </div>
 
       <div class="profile-section">
-        <h3>About Points</h3>
+        <h3>About Tokens</h3>
         <div class="points-explainer">
-          <p>🎁 You start with <strong>1,000 free points</strong> — no real money needed!</p>
-          <p>💡 Points are used for fun only. Win predictions to grow your balance and climb the leaderboard.</p>
+          <p>🎁 You start with <strong>1,000 free tokens</strong> — no real money needed!</p>
+          <p>💡 Tokens are used for fun only. Win predictions to grow your balance and climb the leaderboard.</p>
           <p>🏆 Top players earn Discord roles: Oracle, Prophet, Super Bowl Sage...</p>
         </div>
       </div>

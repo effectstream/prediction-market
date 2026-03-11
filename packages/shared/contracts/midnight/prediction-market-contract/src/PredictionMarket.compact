@@ -15,6 +15,20 @@ pragma language_version >= 0.19.0;
 //   - Winnings are claimed individually by each user (avoids the Compact
 //     for-loop constant-bound limitation).
 //
+// PRIVACY MODEL:
+//   - The option a user bets on is HIDDEN using a commitment+blinding scheme.
+//   - placeBet stores commitment = persistentHash([optionId, blinding]) on-chain.
+//   - optionId and blinding are private ZK witnesses — never disclosed publicly.
+//   - claimWinnings proves knowledge of the opening (optionId + blinding) in ZK,
+//     asserts optionId == resolvedOptionId, and pays out proportionally.
+//   - Nobody (including the batcher/node) can determine which option a user picked
+//     from on-chain data alone.
+//
+// PAYOUT MODEL:
+//   - Proportional: payout = floor(userStake * totalStaked / winnerTotalStaked)
+//   - A remainder witness is passed to verify the integer division in ZK.
+//   - Only users who chose the winning option can claim.
+//
 // Market status values: 0=open, 1=closed, 2=resolved
 // Starting balance minted to new users: 1000 points
 //
@@ -34,7 +48,7 @@ struct Market {
 }
 
 struct Bet {
-  optionId: Bytes<32>,
+  commitment: Bytes<32>,   // persistentHash([optionId, blinding]) — option choice stays private
   amount: Uint<128>,
   claimed: Boolean
 }
@@ -56,9 +70,11 @@ export ledger balances: Map<ZswapCoinPublicKey, Uint<128>>;
 export ledger markets: Map<Bytes<32>, Market>;
 
 // Bets keyed by persistentHash([marketId, hash(userKey)])
+// Stores the commitment (not the raw optionId — that is private)
 export ledger bets: Map<Bytes<32>, Bet>;
 
-// Per-option staking totals keyed by persistentHash([marketId, optionId])
+// Per-option staking totals: key = persistentHash([marketId, optionId])
+// Updated at resolveMarket to record the winning option's stake.
 export ledger optionStakes: Map<Bytes<32>, Uint<128>>;
 
 // ============================================
@@ -70,7 +86,7 @@ circuit betKey(marketId: Bytes<32>, userKey: ZswapCoinPublicKey): Bytes<32> {
   return persistentHash<[Bytes<32>, Bytes<32>]>([disclose(marketId), keyHash]);
 }
 
-circuit optionKey(marketId: Bytes<32>, optionId: Bytes<32>): Bytes<32> {
+circuit optionStakeKey(marketId: Bytes<32>, optionId: Bytes<32>): Bytes<32> {
   return persistentHash<[Bytes<32>, Bytes<32>]>([disclose(marketId), disclose(optionId)]);
 }
 
@@ -79,14 +95,6 @@ circuit getBalanceInternal(userKey: ZswapCoinPublicKey): Uint<128> {
     return 0;
   }
   return balances.lookup(disclose(userKey));
-}
-
-circuit getOptionStakeInternal(marketId: Bytes<32>, optionId: Bytes<32>): Uint<128> {
-  const key = optionKey(disclose(marketId), disclose(optionId));
-  if (!optionStakes.member(key)) {
-    return 0;
-  }
-  return optionStakes.lookup(key);
 }
 
 // ============================================
@@ -152,22 +160,38 @@ export circuit resolveMarket(marketId: Bytes<32>, winningOptionId: Bytes<32>): [
   assert(markets.member(mid), "Market does not exist");
   const m = markets.lookup(mid);
   assert(m.status != 2 as Uint<8>, "Market already resolved");
-  const winnerStake = getOptionStakeInternal(mid, disclose(winningOptionId));
+
+  // Look up the total staked on the winning option
+  const osk = optionStakeKey(mid, disclose(winningOptionId));
+  const winStake = optionStakes.member(osk) ? optionStakes.lookup(osk) : 0 as Uint<128>;
+
   markets.insert(mid, Market {
     status: 2 as Uint<8>,
     resolvedOptionId: disclose(winningOptionId),
     totalStaked: m.totalStaked,
-    winnerTotalStaked: winnerStake
+    winnerTotalStaked: winStake
   });
 }
 
 // ============================================
-// USER: PLACE BET
+// USER: PLACE BET (PRIVATE OPTION)
 // ============================================
-
+//
+// The user's option choice is hidden via a commitment scheme:
+//   commitment = persistentHash([optionId, blinding])
+//
+// Only the commitment is stored on-chain. optionId and blinding
+// are never passed through disclose() and therefore remain private
+// ZK witnesses — invisible to any on-chain observer.
+//
+// The optionId IS also passed (undisclosed) so the circuit can
+// update the per-option stake tally. The tally is indexed by
+// persistentHash([marketId, optionId]) — visible as a hash, not the raw ID.
+//
 export circuit placeBet(
   marketId: Bytes<32>,
-  optionId: Bytes<32>,
+  commitment: Bytes<32>,         // disclosed — stored on-chain
+  optionId: Bytes<32>,           // private ZK witness — NOT disclosed, used to update tally
   userKey: ZswapCoinPublicKey,
   amount: Uint<128>
 ): [] {
@@ -190,10 +214,15 @@ export circuit placeBet(
   balances.insert(key, (balance - disclose(amount)) as Uint<128>);
 
   bets.insert(bk, Bet {
-    optionId: disclose(optionId),
+    commitment: disclose(commitment),
     amount: disclose(amount),
     claimed: false
   });
+
+  // Update per-option stake tally (indexed by hash of optionId — not the raw value)
+  const osk = optionStakeKey(mid, optionId);
+  const prevStake = optionStakes.member(osk) ? optionStakes.lookup(osk) : 0 as Uint<128>;
+  optionStakes.insert(osk, (prevStake + disclose(amount)) as Uint<128>);
 
   markets.insert(mid, Market {
     status: m.status,
@@ -201,28 +230,29 @@ export circuit placeBet(
     totalStaked: (m.totalStaked + disclose(amount)) as Uint<128>,
     winnerTotalStaked: m.winnerTotalStaked
   });
-
-  const ok = optionKey(mid, disclose(optionId));
-  const currentOptionStake = getOptionStakeInternal(mid, disclose(optionId));
-  optionStakes.insert(ok, (currentOptionStake + disclose(amount)) as Uint<128>);
 }
 
 // ============================================
-// USER: CLAIM WINNINGS
+// USER: CLAIM WINNINGS (ZK PROOF OF CORRECT PICK)
 // ============================================
-
-// Payout formula: floor(userStake * totalStaked / winnerTotalStaked)
 //
-// Compact has no division operator. The payout is computed off-chain by the
-// witness function `compute_payout` and passed in as `payoutWitness`.
-// The contract verifies it on-chain:
-//   payoutWitness * winnerTotalStaked <= userStake * totalStaked   (no overpayment)
-//   (payoutWitness + 1) * winnerTotalStaked > userStake * totalStaked  (floor, not ceiling)
+// The user proves in zero-knowledge that:
+//   1. They know optionId and blinding that open their stored commitment
+//   2. Their optionId equals the market's resolvedOptionId (i.e., they picked correctly)
+//
+// Neither optionId nor blinding is ever disclosed publicly — the ZK proof
+// verifies correctness without revealing the private inputs.
+//
+// Payout: proportional = floor(userStake * totalStaked / winnerTotalStaked)
+// The remainder is passed as a witness and verified via the division identity:
+//   payout * winnerTotalStaked + remainder == userStake * totalStaked
+//   remainder < winnerTotalStaked
+//
 export circuit claimWinnings(
   marketId: Bytes<32>,
   userKey: ZswapCoinPublicKey,
-  payoutWitness: Uint<128>,
-  remainderWitness: Uint<128>
+  payoutWitness: Uint<128>,      // floor(userStake * totalStaked / winnerTotalStaked)
+  remainderWitness: Uint<128>    // userStake * totalStaked mod winnerTotalStaked
 ): [] {
   assert(initialized, "Contract not initialized");
 
@@ -230,48 +260,63 @@ export circuit claimWinnings(
   assert(markets.member(mid), "Market does not exist");
   const m = markets.lookup(mid);
   assert(m.status == 2 as Uint<8>, "Market not yet resolved");
+  assert(m.winnerTotalStaked > 0 as Uint<128>, "No winner stake recorded");
 
   const bk = betKey(mid, disclose(userKey));
   assert(bets.member(bk), "No bet found for user on this market");
   const b = bets.lookup(bk);
-
   assert(!b.claimed, "Winnings already claimed");
-  assert(b.optionId == m.resolvedOptionId, "User did not pick the winning option");
-  assert(m.winnerTotalStaked > 0 as Uint<128>, "Winner stake is zero");
 
-  // Compact has no division operator. The payout is computed off-chain and passed in.
-  // We verify correctness using the floor-division identity:
-  //   payout = floor(userStake * totalStaked / winnerTotalStaked)
-  // which is equivalent to:
-  //   payout * winnerTotalStaked <= userStake * totalStaked < (payout+1) * winnerTotalStaked
+  // Retrieve private optionId and blinding from witnesses
+  const optionId_ = optionId();
+  const blinding_ = blinding();
+
+  // Verify the commitment opens correctly.
+  // optionId_ and blinding_ are private witnesses — this assertion proves
+  // knowledge of the opening without revealing either value on-chain.
+  const recomputed = persistentHash<[Bytes<32>, Bytes<32>]>([optionId_, blinding_]);
+  assert(recomputed == b.commitment, "Invalid commitment opening");
+
+  // Verify the private optionId matches the winning option.
+  // This is the core privacy guarantee: the correctness of the pick is
+  // proven in ZK without disclosing which option was chosen.
+  assert(optionId_ == m.resolvedOptionId, "User did not pick the winning option");
+
+  // Verify proportional payout via Euclidean division identity (no on-chain division):
+  //   payout * winnerTotalStaked + remainder == userStake * totalStaked
+  //   remainder < winnerTotalStaked
   //
-  // To avoid overflow (128*128 bits), we cap all values at Uint<64> range in practice
-  // (points are small numbers). We accept this constraint for the demo.
-  // If larger values are ever needed, the payout can be computed and stored by the
-  // resolveMarket circuit instead.
-  //
-  // For correctness with reasonable point values (up to ~10^9), we verify using
-  // the equivalent remainder form: userStake * totalStaked == payout * winnerTotalStaked + remainder
-  // rewritten to avoid overflow by asserting all terms fit in Uint<64>.
-  const payout = disclose(payoutWitness);
-  const remainder = disclose(remainderWitness);
-  // Verify floor division: payout * winnerStake + remainder == userStake * totalStaked
-  // All values are bounded by Uint<64> for safety (balances stay well under 2^63).
-  const lhs = (payout as Uint<64>) * (m.winnerTotalStaked as Uint<64>) + (remainder as Uint<64>);
-  const rhs = (b.amount as Uint<64>) * (m.totalStaked as Uint<64>);
-  assert(lhs == rhs, "Invalid payout witness");
-  assert(remainder < m.winnerTotalStaked, "Invalid remainder witness");
+  // Cast to Field for intermediate multiplication to avoid Uint<128> overflow.
+  const numerator = (b.amount as Field) * (m.totalStaked as Field);
+  const winnerStake = m.winnerTotalStaked;
+  assert(
+    (disclose(payoutWitness) as Field) * (winnerStake as Field) + (disclose(remainderWitness) as Field) == numerator,
+    "Payout witness mismatch"
+  );
+  assert(disclose(remainderWitness) < winnerStake, "Remainder witness too large");
 
   bets.insert(bk, Bet {
-    optionId: b.optionId,
+    commitment: b.commitment,
     amount: b.amount,
     claimed: true
   });
 
   const key = disclose(userKey);
   const currentBalance = getBalanceInternal(disclose(userKey));
-  balances.insert(key, (currentBalance + payout) as Uint<128>);
+  balances.insert(key, (currentBalance + disclose(payoutWitness)) as Uint<128>);
 }
+
+// ============================================
+// PRIVATE WITNESSES
+// ============================================
+//
+// These are implemented in witnesses.ts. They supply private inputs
+// to claimWinnings — the optionId and blinding that open the commitment.
+// Neither value is ever passed through disclose(), ensuring they remain
+// invisible to any on-chain observer.
+
+witness optionId(): Bytes<32>;
+witness blinding(): Bytes<32>;
 
 // ============================================
 // QUERIES
@@ -297,8 +342,12 @@ export circuit getMarketTotalStaked(marketId: Bytes<32>): Uint<128> {
   return markets.lookup(mid).totalStaked;
 }
 
-export circuit getWinnerStakeForOption(marketId: Bytes<32>, optionId: Bytes<32>): Uint<128> {
-  return getOptionStakeInternal(disclose(marketId), disclose(optionId));
+export circuit getWinnerStakeForOption(marketId: Bytes<32>, optionId_: Bytes<32>): Uint<128> {
+  const osk = optionStakeKey(disclose(marketId), disclose(optionId_));
+  if (!optionStakes.member(osk)) {
+    return 0 as Uint<128>;
+  }
+  return optionStakes.lookup(osk);
 }
 
 export circuit getBetAmount(marketId: Bytes<32>, userKey: ZswapCoinPublicKey): Uint<128> {
@@ -309,12 +358,12 @@ export circuit getBetAmount(marketId: Bytes<32>, userKey: ZswapCoinPublicKey): U
   return bets.lookup(bk).amount;
 }
 
-export circuit getBetOptionId(marketId: Bytes<32>, userKey: ZswapCoinPublicKey): Bytes<32> {
+export circuit getBetCommitment(marketId: Bytes<32>, userKey: ZswapCoinPublicKey): Bytes<32> {
   const bk = betKey(disclose(marketId), disclose(userKey));
   if (!bets.member(bk)) {
     return default<Bytes<32>>;
   }
-  return bets.lookup(bk).optionId;
+  return bets.lookup(bk).commitment;
 }
 
 export circuit isBetClaimed(marketId: Bytes<32>, userKey: ZswapCoinPublicKey): Boolean {

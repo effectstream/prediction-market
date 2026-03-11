@@ -25,18 +25,17 @@ export interface UserBet {
   betId: string;
   marketId: string;
   marketTitle: string;
-  optionId: string;
-  optionLabel: string;
+  commitment: string;   // opaque hex — option choice is private; use localStorage for display
   amount: BetAmount;
   placedAt: string;
-  status: "pending" | "won" | "lost";
+  status: "pending" | "claimed";
   payout?: number;
 }
 
 export interface UserProfile {
   walletAddress: string;
   displayName?: string;
-  points: number;
+  tokens: number;
   discordLinked: boolean;
   discordUsername?: string;
   totalBets: number;
@@ -50,18 +49,17 @@ export interface LeaderboardEntry {
   walletAddress: string;
   displayName?: string;
   discordUsername?: string;
-  points: number;
+  tokens: number;
   correctBets: number;
   totalBets: number;
 }
 
-export type AppScreen = "markets" | "market-detail" | "my-bets" | "leaderboard" | "profile";
+export type AppScreen = "markets" | "market-detail" | "my-bets" | "leaderboard" | "profile" | "admin";
 
 export interface AppState {
   currentScreen: AppScreen;
   selectedMarketId?: string;
   userProfile?: UserProfile;
-  // Simulated wallet - in Phase 1 we fake a wallet address
   walletAddress?: string;
   walletConnected: boolean;
 }

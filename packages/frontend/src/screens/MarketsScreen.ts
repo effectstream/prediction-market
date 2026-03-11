@@ -37,7 +37,7 @@ export function renderMarketsScreen(props: MarketsScreenProps): string {
       <div class="page-header">
         <div>
           <h1 class="page-title">🔮 Prediction Markets</h1>
-          <p class="page-subtitle">Bet on upcoming events using your points. Winners earn more!</p>
+          <p class="page-subtitle">Bet on upcoming events using your tokens. Winners earn more!</p>
         </div>
       </div>
 

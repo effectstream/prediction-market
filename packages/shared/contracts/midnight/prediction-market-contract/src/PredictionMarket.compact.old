@@ -1,0 +1,308 @@
+pragma language_version >= 0.19.0;
+
+// ============================================
+// PREDICTION MARKET CONTRACT
+// ============================================
+//
+// A prediction market where users stake points on outcomes.
+//
+// ARCHITECTURE:
+//   - A batcher (funded Midnight wallet) submits transactions on behalf of users.
+//   - The batcher passes the user's ZswapCoinPublicKey explicitly as a parameter,
+//     since ownPublicKey() inside a circuit returns the batcher's key.
+//   - The resolver key is set at deploy time from an env var (MIDNIGHT_SEED).
+//     Only this key may call resolveMarket().
+//   - Winnings are claimed individually by each user (avoids the Compact
+//     for-loop constant-bound limitation).
+//
+// PRIVACY MODEL:
+//   - The option a user bets on is HIDDEN using a commitment+blinding scheme.
+//   - placeBet stores commitment = persistentHash([optionId, blinding]) on-chain.
+//   - optionId and blinding are private ZK witnesses — never disclosed publicly.
+//   - claimWinnings proves knowledge of the opening (optionId + blinding) in ZK,
+//     asserts optionId == resolvedOptionId, and pays out 2× the stake.
+//   - Nobody (including the batcher/node) can determine which option a user picked
+//     from on-chain data alone.
+//
+// Market status values: 0=open, 1=closed, 2=resolved
+// Starting balance minted to new users: 1000 points
+// Payout: 2× stake for winners (fixed multiplier)
+//
+// ============================================
+
+import CompactStandardLibrary;
+
+// ============================================
+// STRUCTS
+// ============================================
+
+struct Market {
+  status: Uint<8>,
+  resolvedOptionId: Bytes<32>,
+  totalStaked: Uint<128>
+}
+
+struct Bet {
+  commitment: Bytes<32>,   // persistentHash([optionId, blinding]) — option choice stays private
+  amount: Uint<128>,
+  claimed: Boolean
+}
+
+// ============================================
+// LEDGER STATE
+// ============================================
+
+// Set once at deploy time; only this key may call resolveMarket / closeMarket / createMarket
+export ledger resolverKey: ZswapCoinPublicKey;
+
+// Whether the contract has been initialized
+export ledger initialized: Boolean;
+
+// Point token balances per user
+export ledger balances: Map<ZswapCoinPublicKey, Uint<128>>;
+
+// Markets keyed by marketId (Bytes<32>)
+export ledger markets: Map<Bytes<32>, Market>;
+
+// Bets keyed by persistentHash([marketId, hash(userKey)])
+// Stores the commitment (not the raw optionId — that is private)
+export ledger bets: Map<Bytes<32>, Bet>;
+
+// ============================================
+// INTERNAL HELPERS
+// ============================================
+
+circuit betKey(marketId: Bytes<32>, userKey: ZswapCoinPublicKey): Bytes<32> {
+  const keyHash = persistentHash<ZswapCoinPublicKey>(disclose(userKey));
+  return persistentHash<[Bytes<32>, Bytes<32>]>([disclose(marketId), keyHash]);
+}
+
+circuit getBalanceInternal(userKey: ZswapCoinPublicKey): Uint<128> {
+  if (!balances.member(disclose(userKey))) {
+    return 0;
+  }
+  return balances.lookup(disclose(userKey));
+}
+
+// ============================================
+// SETUP
+// ============================================
+
+export circuit initialize(resolverKey_: ZswapCoinPublicKey): [] {
+  assert(!initialized, "Contract already initialized");
+  initialized = true;
+  resolverKey = disclose(resolverKey_);
+}
+
+// ============================================
+// USER REGISTRATION
+// ============================================
+
+// Register a new user and mint their starting 1000-point balance.
+// Idempotent: safe to call multiple times (subsequent calls are no-ops).
+export circuit registerUser(userKey: ZswapCoinPublicKey): [] {
+  assert(initialized, "Contract not initialized");
+  const key = disclose(userKey);
+  if (!balances.member(key)) {
+    balances.insert(key, 1000 as Uint<128>);
+  }
+}
+
+// ============================================
+// ADMIN: MARKET MANAGEMENT
+// ============================================
+
+export circuit createMarket(marketId: Bytes<32>): [] {
+  assert(initialized, "Contract not initialized");
+  assert(ownPublicKey() == resolverKey, "Only resolver may create markets");
+  const mid = disclose(marketId);
+  assert(!markets.member(mid), "Market already exists");
+  markets.insert(mid, Market {
+    status: 0 as Uint<8>,
+    resolvedOptionId: default<Bytes<32>>,
+    totalStaked: 0 as Uint<128>
+  });
+}
+
+export circuit closeMarket(marketId: Bytes<32>): [] {
+  assert(initialized, "Contract not initialized");
+  assert(ownPublicKey() == resolverKey, "Only resolver may close markets");
+  const mid = disclose(marketId);
+  assert(markets.member(mid), "Market does not exist");
+  const m = markets.lookup(mid);
+  assert(m.status == 0 as Uint<8>, "Market is not open");
+  markets.insert(mid, Market {
+    status: 1 as Uint<8>,
+    resolvedOptionId: m.resolvedOptionId,
+    totalStaked: m.totalStaked
+  });
+}
+
+export circuit resolveMarket(marketId: Bytes<32>, winningOptionId: Bytes<32>): [] {
+  assert(initialized, "Contract not initialized");
+  assert(ownPublicKey() == resolverKey, "Only resolver may resolve markets");
+  const mid = disclose(marketId);
+  assert(markets.member(mid), "Market does not exist");
+  const m = markets.lookup(mid);
+  assert(m.status != 2 as Uint<8>, "Market already resolved");
+  markets.insert(mid, Market {
+    status: 2 as Uint<8>,
+    resolvedOptionId: disclose(winningOptionId),
+    totalStaked: m.totalStaked
+  });
+}
+
+// ============================================
+// USER: PLACE BET (PRIVATE OPTION)
+// ============================================
+//
+// The user's option choice is hidden via a commitment scheme:
+//   commitment = persistentHash([optionId, blinding])
+//
+// Only the commitment is stored on-chain. optionId and blinding
+// are never passed through disclose() and therefore remain private
+// ZK witnesses — invisible to any on-chain observer.
+//
+export circuit placeBet(
+  marketId: Bytes<32>,
+  commitment: Bytes<32>,         // disclosed — stored on-chain
+  userKey: ZswapCoinPublicKey,
+  amount: Uint<128>
+): [] {
+  assert(initialized, "Contract not initialized");
+
+  const mid = disclose(marketId);
+  assert(markets.member(mid), "Market does not exist");
+  const m = markets.lookup(mid);
+  assert(m.status == 0 as Uint<8>, "Market is not open for betting");
+  assert(disclose(amount) > 0 as Uint<128>, "Bet amount must be positive");
+
+  const key = disclose(userKey);
+  assert(balances.member(key), "User not registered");
+  const balance = balances.lookup(key);
+  assert(balance >= disclose(amount), "Insufficient balance");
+
+  const bk = betKey(mid, disclose(userKey));
+  assert(!bets.member(bk), "User already has a bet on this market");
+
+  balances.insert(key, (balance - disclose(amount)) as Uint<128>);
+
+  bets.insert(bk, Bet {
+    commitment: disclose(commitment),
+    amount: disclose(amount),
+    claimed: false
+  });
+
+  markets.insert(mid, Market {
+    status: m.status,
+    resolvedOptionId: m.resolvedOptionId,
+    totalStaked: (m.totalStaked + disclose(amount)) as Uint<128>
+  });
+}
+
+// ============================================
+// USER: CLAIM WINNINGS (ZK PROOF OF CORRECT PICK)
+// ============================================
+//
+// The user proves in zero-knowledge that:
+//   1. They know optionId and blinding that open their stored commitment
+//   2. Their optionId equals the market's resolvedOptionId (i.e., they picked correctly)
+//
+// Neither optionId nor blinding is ever disclosed publicly — the ZK proof
+// verifies correctness without revealing the private inputs.
+//
+// Payout: fixed 2× the user's stake (no division required).
+//
+export circuit claimWinnings(
+  marketId: Bytes<32>,
+  userKey: ZswapCoinPublicKey,
+  optionId: Bytes<32>,    // private ZK witness — NOT disclosed
+  blinding: Bytes<32>     // private ZK witness — NOT disclosed
+): [] {
+  assert(initialized, "Contract not initialized");
+
+  const mid = disclose(marketId);
+  assert(markets.member(mid), "Market does not exist");
+  const m = markets.lookup(mid);
+  assert(m.status == 2 as Uint<8>, "Market not yet resolved");
+
+  const bk = betKey(mid, disclose(userKey));
+  assert(bets.member(bk), "No bet found for user on this market");
+  const b = bets.lookup(bk);
+  assert(!b.claimed, "Winnings already claimed");
+
+  // Verify the commitment opens correctly.
+  // optionId and blinding are private witnesses — this assertion proves
+  // knowledge of the opening without revealing either value on-chain.
+  const recomputed = persistentHash<[Bytes<32>, Bytes<32>]>([optionId, blinding]);
+  assert(recomputed == b.commitment, "Invalid commitment opening");
+
+  // Verify the private optionId matches the winning option.
+  // This is the core privacy guarantee: the correctness of the pick is
+  // proven in ZK without disclosing which option was chosen.
+  assert(optionId == m.resolvedOptionId, "User did not pick the winning option");
+
+  bets.insert(bk, Bet {
+    commitment: b.commitment,
+    amount: b.amount,
+    claimed: true
+  });
+
+  // Fixed 2× payout — no division needed
+  const payout = (2 as Uint<128>) * b.amount;
+  const key = disclose(userKey);
+  const currentBalance = getBalanceInternal(disclose(userKey));
+  balances.insert(key, (currentBalance + payout) as Uint<128>);
+}
+
+// ============================================
+// QUERIES
+// ============================================
+
+export circuit getBalance(userKey: ZswapCoinPublicKey): Uint<128> {
+  return getBalanceInternal(disclose(userKey));
+}
+
+export circuit getMarketStatus(marketId: Bytes<32>): Uint<8> {
+  const mid = disclose(marketId);
+  if (!markets.member(mid)) {
+    return 255 as Uint<8>;
+  }
+  return markets.lookup(mid).status;
+}
+
+export circuit getMarketTotalStaked(marketId: Bytes<32>): Uint<128> {
+  const mid = disclose(marketId);
+  if (!markets.member(mid)) {
+    return 0 as Uint<128>;
+  }
+  return markets.lookup(mid).totalStaked;
+}
+
+export circuit getBetAmount(marketId: Bytes<32>, userKey: ZswapCoinPublicKey): Uint<128> {
+  const bk = betKey(disclose(marketId), disclose(userKey));
+  if (!bets.member(bk)) {
+    return 0 as Uint<128>;
+  }
+  return bets.lookup(bk).amount;
+}
+
+export circuit getBetCommitment(marketId: Bytes<32>, userKey: ZswapCoinPublicKey): Bytes<32> {
+  const bk = betKey(disclose(marketId), disclose(userKey));
+  if (!bets.member(bk)) {
+    return default<Bytes<32>>;
+  }
+  return bets.lookup(bk).commitment;
+}
+
+export circuit isBetClaimed(marketId: Bytes<32>, userKey: ZswapCoinPublicKey): Boolean {
+  const bk = betKey(disclose(marketId), disclose(userKey));
+  if (!bets.member(bk)) {
+    return false;
+  }
+  return bets.lookup(bk).claimed;
+}
+
+export circuit isUserRegistered(userKey: ZswapCoinPublicKey): Boolean {
+  return balances.member(disclose(userKey));
+}

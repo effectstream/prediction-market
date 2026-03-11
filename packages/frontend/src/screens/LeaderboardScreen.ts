@@ -1,5 +1,5 @@
 import type { LeaderboardEntry } from "../types.ts";
-import { truncateAddress, formatPoints } from "../utils.ts";
+import { truncateAddress, formatTokens } from "../utils.ts";
 
 interface LeaderboardProps {
   entries: LeaderboardEntry[];
@@ -30,7 +30,7 @@ export function renderLeaderboardScreen(props: LeaderboardProps): string {
             <span class="lb-name">${nameDisplay}</span>
             ${isMe ? `<span class="me-tag">You</span>` : ""}
           </td>
-          <td class="lb-points">${entry.points.toLocaleString()} pts</td>
+          <td class="lb-points">${entry.tokens.toLocaleString()} tkn</td>
           <td class="lb-bets">${entry.correctBets}/${entry.totalBets}</td>
           <td class="lb-winrate">
             <span class="winrate ${winRate >= 60 ? "winrate--good" : ""}">${winRate}%</span>
@@ -58,7 +58,7 @@ export function renderLeaderboardScreen(props: LeaderboardProps): string {
             <tr>
               <th>Rank</th>
               <th>Player</th>
-              <th>Points</th>
+              <th>Tokens</th>
               <th>Correct/Total</th>
               <th>Win Rate</th>
             </tr>
